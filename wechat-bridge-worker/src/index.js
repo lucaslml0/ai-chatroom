@@ -2,7 +2,9 @@
 // 唯一职责：在腾讯 iLink Bot API 与聊天室之间搬运消息。
 // - 每 1 分钟 Cron 拉一次 getupdates（20 秒 abort 超时，不用 45 秒长轮询）；
 // - 「聊：」进聊天室（按绑定解析身份）、绑定码绑 key、其余文本进命令队列；
-// - 回推只发 @绑定身份 / @所有人 / 系统消息 / @微信访客（沿用旧桥规则）。
+// - 回推只发 @绑定身份 / @所有人 / 系统消息 / @微信访客 / 回复了某条微信消息
+//   （reply_to 指向微信消息时推回给原发送者；沿用旧桥规则 + 2026-11-09 新增
+//   reply_to 规则——Atlas 的纯 reply_to 回复此前因 mentions 为空被漏推）。
 // 免费额度：Workers 10 万请求/天；DO SQLite 10 万请求/天。
 // 密钥 ILINK_BOT_TOKEN / BRIDGE_TOKEN 均为 wrangler secret，不进仓库。
 import qrcode from "./qrcode.js";
@@ -76,7 +78,11 @@ export function classifyInbound(text) {
 // 回推路由：返回要发给哪些 wechat_id（纯函数）。
 // boundByName: Map<identity 名字, wechat_id>；allBound: 全部已绑定 wechat_id；
 // lastFrom: 最近一位未绑定发送者（供「微信访客」沿用旧行为）。
-export function routePushTargets(msg, boundByName, allBound, lastFrom) {
+// byId: 可选，Map<消息 id, 消息>（本轮拉到的 50 条历史），用于解析 reply_to：
+//   回复了某条 platform=wechat 的消息 → 推回给那条消息的发送者（已绑定身份按
+//   名字找 wechat_id；「微信访客」推给 lastFrom）；目标不在本轮窗口内时不推，
+//   只走原有 @ 规则（@ 仍是兜底）。
+export function routePushTargets(msg, boundByName, allBound, lastFrom, byId) {
   const mentions = msg.mentions || [];
   const targets = new Set();
   for (const name of mentions) {
@@ -89,6 +95,16 @@ export function routePushTargets(msg, boundByName, allBound, lastFrom) {
     for (const w of allBound) targets.add(w);
   }
   if (mentions.includes("微信访客") && lastFrom) targets.add(lastFrom);
+  if (msg.reply_to && byId) {
+    const target = byId.get(msg.reply_to);
+    if (target && target.platform === "wechat") {
+      if (boundByName.has(target.sender_name)) {
+        targets.add(boundByName.get(target.sender_name));
+      } else if (target.sender_name === "微信访客" && lastFrom) {
+        targets.add(lastFrom);
+      }
+    }
+  }
   return [...targets];
 }
 
@@ -465,10 +481,17 @@ export async function runPollCycle(env, sys, report = []) {
   const fresh = msgs
     .filter((m) => !seenGeneral.has(m.id) && m.platform !== "wechat")
     .sort((a, b) => a.ts - b.ts);
+  const byId = new Map(msgs.map((m) => [m.id, m]));
   let pumped = 0,
     skippedNoCtx = 0;
   for (const m of fresh) {
-    for (const wid of routePushTargets(m, boundByName, allBound, lastFrom)) {
+    for (const wid of routePushTargets(
+      m,
+      boundByName,
+      allBound,
+      lastFrom,
+      byId,
+    )) {
       const ctx = await sys.doCall("get-context", { wechat_id: wid });
       if (!ctx || !ctx.context_token) {
         skippedNoCtx++;

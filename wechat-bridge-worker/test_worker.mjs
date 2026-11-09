@@ -238,6 +238,82 @@ check(
     null,
   ).length === 0,
 );
+// reply_to 回推（2026-11-09 新增）：回复某条微信消息时推回给原发送者。
+const wechatMsgById = new Map([
+  [
+    "mW1",
+    { id: "mW1", sender_name: "luo", platform: "wechat", text: "在吗" },
+  ],
+  [
+    "mW2",
+    {
+      id: "mW2",
+      sender_name: "微信访客",
+      platform: "wechat",
+      text: "访客问",
+    },
+  ],
+  [
+    "mW3",
+    { id: "mW3", sender_name: "Marley", platform: "api", text: "不是微信" },
+  ],
+]);
+check(
+  "路由：reply_to 已绑定微信消息 → 推给原发送者",
+  JSON.stringify(
+    routePushTargets(
+      { mentions: [], sender_name: "Atlas", reply_to: "mW1", text: "在呢" },
+      boundByName,
+      allBound,
+      null,
+      wechatMsgById,
+    ),
+  ) === JSON.stringify([LUO]),
+);
+check(
+  "路由：reply_to 微信访客消息 → 推给 lastFrom",
+  JSON.stringify(
+    routePushTargets(
+      { mentions: [], sender_name: "Atlas", reply_to: "mW2", text: "收到" },
+      boundByName,
+      allBound,
+      "guest@im.wechat",
+      wechatMsgById,
+    ),
+  ) === JSON.stringify(["guest@im.wechat"]),
+);
+check(
+  "路由：reply_to 目标不在本轮窗口内 → 不误推",
+  routePushTargets(
+    { mentions: [], sender_name: "Atlas", reply_to: "mMissing", text: "x" },
+    boundByName,
+    allBound,
+    "guest@im.wechat",
+    wechatMsgById,
+  ).length === 0,
+);
+check(
+  "路由：reply_to 非微信消息 → 不推",
+  routePushTargets(
+    { mentions: [], sender_name: "Atlas", reply_to: "mW3", text: "x" },
+    boundByName,
+    allBound,
+    null,
+    wechatMsgById,
+  ).length === 0,
+);
+check(
+  "路由：reply_to 与 @ 并存 → 去重合并",
+  JSON.stringify(
+    routePushTargets(
+      { mentions: ["luo"], sender_name: "Atlas", reply_to: "mW1", text: "x" },
+      boundByName,
+      allBound,
+      null,
+      wechatMsgById,
+    ),
+  ) === JSON.stringify([LUO]),
+);
 check(
   "回推格式截断 1000 字",
   formatPush("general", { sender_name: "Atlas", text: "x".repeat(1500) })
@@ -500,6 +576,67 @@ check("QR：不同码不同图", makeQrSvg("AAAAAA") !== makeQrSvg("BBBBBB"));
     noCtx.status === 400,
     JSON.stringify(noCtx),
   );
+}
+
+// ---------- 13. runPollCycle：reply_to 回推（复现 2026-11-09 22:26 真实漏推） ----------
+// luo（微信）发「现在还有哪些人在呀」，Atlas 纯 reply_to 回复（mentions 为空）。
+// 旧规则下这条回复不推；新规则下应推给 luo 的微信。
+{
+  const sys = new MockSys({
+    updates: { ret: 0, msgs: [] },
+    bindings: [{ identity_name: "luo（微信）", wechat_id: LUO }],
+    roomMessages: [
+      {
+        id: "m_def",
+        sender_name: "luo（微信）",
+        sender_type: "human",
+        platform: "wechat",
+        text: "现在还有哪些人在呀",
+        mentions: [],
+        ts: 1,
+      },
+      {
+        id: "m_cc",
+        sender_name: "Atlas",
+        sender_type: "agent",
+        platform: "api",
+        text: "在呢",
+        mentions: [],
+        reply_to: "m_def",
+        ts: 2,
+      },
+      {
+        id: "m_orphan",
+        sender_name: "Atlas",
+        sender_type: "agent",
+        platform: "api",
+        text: "目标不在窗口内",
+        mentions: [],
+        reply_to: "m_gone",
+        ts: 3,
+      },
+    ],
+  });
+  sys.contexts.set(LUO, "ctx-luo");
+  const r = await runPollCycle({}, sys);
+  check(
+    "reply_to 回推：纯 reply_to 回复发出 1 条",
+    r.pumped === 1,
+    JSON.stringify(r),
+  );
+  check(
+    "reply_to 回推：发给绑定的微信号、内容是回复",
+    sys.sent.length === 1 &&
+      sys.sent[0].to === LUO &&
+      sys.sent[0].text.includes("在呢"),
+    JSON.stringify(sys.sent),
+  );
+  check(
+    "reply_to 回推：目标不在窗口内的不误推",
+    !sys.sent.some((s) => s.text.includes("目标不在窗口内")),
+  );
+  const r2 = await runPollCycle({}, sys);
+  check("reply_to 回推：第二轮不重复发", r2.pumped === 0);
 }
 
 console.log(

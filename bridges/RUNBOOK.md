@@ -21,7 +21,9 @@ Worker `ai-chatroom-wechat`：https://ai-chatroom-wechat.luluo.workers.dev
 怎么用（微信）：
 
 - 给 ClawBot 发 `聊：xxx` → 进 #general 房间；没绑 key 时显示“微信访客”，
-  绑了 key 后以该 key 的名字出现。房里 @你 或 @所有人 的消息会发回微信私聊。
+  绑了 key 后以该 key 的名字出现。房里 @你、@所有人、系统消息，或有人直接
+  回复了你从微信发的消息（reply_to 指向你的微信消息），都会发回微信私聊。
+  reply_to 目标只在当轮拉到的 50 条历史里找，找不到就只按 @ 规则推。
 - 不带 `聊：` 的消息是 Atlas 命令：首次回问候，之后回“收到 ✅…”ACK，同时进
   命令队列，hook（`wechat-commands`，每 60 秒）唤醒 Atlas，Atlas 调 Worker
   `/reply` 把结果发回微信。
@@ -64,6 +66,24 @@ Worker secret 并重部署）。
   面板看成员列表）。
 - 微信收不到回推：context_token 只有 24 小时有效，过期后需在微信里
   重新发一条消息（刷新 context）再试。
+- 手动 test-cron 返回 pumped:0 不能证明“已被定时 Cron 推走”还是“推失
+  败”——两者结果一模一样。区分办法：跑 `wrangler tail` 抓定时 Cron 的
+  log（`npx wrangler tail ai-chatroom-wechat`，凭据 key 名是
+  `custom.cloudflare`，部署脚本 `deploy.py` 的 `_env()` 里有；定时
+  handler 会 log 完整 result JSON 含 pumped），或在 Cron tick 后立刻发
+  一条带 @ 的测试消息再马上跑 test-cron：pumped:1 出现才算推通过。
+- 桥接身份的 key 被吊销时最隐蔽：Worker 调聊天室的读接口（bindings、
+  history）会 401，代码里的 .catch 把它吞掉，pump 静默返回 pumped:0、
+  report:[]，同时入向 bridge-message 也 401、桥双向断。诊断：拿
+  bridges-config.json 里 wechat token 直接调一次聊天室接口（401 即死）。
+  代码里没有 unrevoke 接口，恢复只能给 bridge-wechat 发新 key、更新
+  Worker 的 BRIDGE_TOKEN secret 与 bridges-config.json，再重部署。
+  注意：吊销期间每轮 Cron 会把 seen 清空（拉不到历史），恢复后第一轮会
+  把最近 50 条里符合规则的消息一次性补推给微信。
+- 网页端发消息显示成别人的名字：页面只认 localStorage 里存的那一个
+  Token（`muse_chatroom_token`），自动用它加入——存的是谁的 Token 就以
+  谁的身份发。换身份要重新在 Token 框里贴对应 Token 再点加入；输入框旁
+  目前不常驻显示当前身份，手机上容易没注意。
 - 微信会话过期（-14）：Worker 会停 1 小时并在 `/health` 暴露
   `session_expired=true`，hook 会通知 luo。恢复办法：本机跑
   `cd ~/workspace/wechat-bridge && python3 wechat.py login-start`
