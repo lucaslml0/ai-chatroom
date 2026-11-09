@@ -1,0 +1,891 @@
+// ai-chatroom v2 — Cloudflare Workers + Durable Objects (SQLite, free tier)
+// PLAN.md v2.4: Token 准入、一号一 key；房主最高权限；Moderator 风险操作
+// （禁言/踢人/删消息/吊销 key）需房主批准；Moderator 可建 key 并私发房主；
+// Moderator 只回 @Moderator 的消息（Workers AI 小管家，见 scheduled 处理）。
+// 免费额度：Workers 10万请求/天；DO SQLite 10万请求/天 + 13000 GB-s/天；
+// Workers AI 10000 neurons/天（小管家日预算 2000）。
+
+export const DEFAULT_ROOMS = [
+  { slug: "general", name: "综合大厅", topic: "随便聊，Muse 使用心得、邀请互换都从这里开始" },
+  { slug: "muse-exchange", name: "邀请互换", topic: "新用户互邀、换 token、分享邀请码（只发自己的邀请，别发账号密码）" },
+  { slug: "help", name: "新手求助", topic: "刚用 Muse 不会配置？在这里问，大家和 Agent 一起回" },
+];
+
+export function defaultRules() {
+  return {
+    mode: "humans_only",
+    ignore_agents: true,
+    keywords: [],
+    allow_senders: [],
+    block_senders: [],
+    cooldown_seconds: 30,
+  };
+}
+
+const MODES = ["humans_only", "mentions_only", "all", "keywords", "none"];
+const ROLES = ["owner", "moderator", "member"];
+const ACTIONS = ["mute", "kick", "delete", "revoke-key"];
+
+// 回复规则引擎：服务端 /api/evaluate 与前端、Python 示例共用同一逻辑。
+export function evaluateRules(rules, msg, self) {
+  const r = { ...defaultRules(), ...(rules || {}) };
+  const sender = msg.sender_name || "";
+  const senderId = msg.sender_id || "";
+  const text = msg.text || "";
+  const mentions = msg.mentions || [];
+  if (self && senderId && senderId === self.id) return { should_reply: false, reason: "自己的消息" };
+  const blocked = (r.block_senders || []).some((x) => x === sender || x === senderId);
+  if (blocked) return { should_reply: false, reason: "在屏蔽名单里" };
+  if ((r.allow_senders || []).length > 0) {
+    const ok = r.allow_senders.some((x) => x === sender || x === senderId);
+    if (!ok) return { should_reply: false, reason: "不在白名单里" };
+  }
+  const mentioned = self && (mentions.includes(self.name) || mentions.includes("all") || mentions.includes("所有人"));
+  const hitKeyword = (r.keywords || []).some((k) => k && text.includes(k));
+  if (r.mode === "none") return { should_reply: false, reason: "模式是不自动回复" };
+  if (mentioned) return { should_reply: true, reason: "被 @提及" };
+  if (hitKeyword) return { should_reply: true, reason: "命中关键词" };
+  if (r.mode === "mentions_only") return { should_reply: false, reason: "只回 @我的消息" };
+  if (r.mode === "keywords") return { should_reply: false, reason: "只回关键词消息" };
+  const isAgent = msg.sender_type === "agent" || msg.sender_type === "bot";
+  if (isAgent && r.ignore_agents) return { should_reply: false, reason: "默认忽略其他 Agent，避免循环" };
+  if (r.mode === "humans_only" && msg.sender_type !== "human") return { should_reply: false, reason: "只回人类消息" };
+  if (r.mode === "all") return { should_reply: true, reason: "模式是全部回复" };
+  return { should_reply: true, reason: "符合回复规则" };
+}
+
+function json(data, status = 200) {
+  return new Response(JSON.stringify(data), {
+    status,
+    headers: { "content-type": "application/json; charset=utf-8", "access-control-allow-origin": "*" },
+  });
+}
+function err(message, status = 400) { return json({ error: message }, status); }
+function newToken() {
+  const b = new Uint8Array(16);
+  crypto.getRandomValues(b);
+  return "muse_" + [...b].map((x) => x.toString(16).padStart(2, "0")).join("");
+}
+function newId(prefix) {
+  const b = new Uint8Array(4);
+  crypto.getRandomValues(b);
+  return prefix + [...b].map((x) => x.toString(16).padStart(2, "0")).join("");
+}
+function parseMentions(text) {
+  const out = [];
+  for (const m of text.matchAll(/@([^\s@]{1,30})/g)) if (!out.includes(m[1])) out.push(m[1]);
+  return out;
+}
+function sanitizeRules(input) {
+  const r = defaultRules();
+  if (!input || typeof input !== "object") return r;
+  if (MODES.includes(input.mode)) r.mode = input.mode;
+  if (typeof input.ignore_agents === "boolean") r.ignore_agents = input.ignore_agents;
+  const arr = (v) => Array.isArray(v) ? v.filter((x) => typeof x === "string" && x.trim()).slice(0, 20).map((x) => x.trim()) : [];
+  r.keywords = arr(input.keywords);
+  r.allow_senders = arr(input.allow_senders);
+  r.block_senders = arr(input.block_senders);
+  if (Number.isFinite(+input.cooldown_seconds)) r.cooldown_seconds = Math.max(0, Math.min(3600, Math.floor(+input.cooldown_seconds)));
+  return r;
+}
+async function sha12(s) {
+  const buf = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(s));
+  return [...new Uint8Array(buf)].map((x) => x.toString(16).padStart(2, "0")).join("").slice(0, 12);
+}
+
+// ---------------- Durable Object ----------------
+export class ChatRoom {
+  constructor(ctx, env) {
+    this.ctx = ctx;
+    this.env = env;
+    this.rate = new Map();
+    this.ctx.blockConcurrencyWhile(async () => {
+      const sql = this.ctx.storage.sql;
+      sql.exec(`CREATE TABLE IF NOT EXISTS identities(
+        token TEXT PRIMARY KEY, id TEXT, name TEXT, type TEXT,
+        platform TEXT DEFAULT 'web', role TEXT DEFAULT 'member', bridge TEXT DEFAULT '',
+        rules TEXT, revoked INTEGER DEFAULT 0,
+        created INTEGER, last_reply INTEGER DEFAULT 0, last_seen INTEGER DEFAULT 0)`);
+      sql.exec(`CREATE TABLE IF NOT EXISTS rooms(
+        slug TEXT PRIMARY KEY, name TEXT, topic TEXT, created INTEGER)`);
+      sql.exec(`CREATE TABLE IF NOT EXISTS messages(
+        id TEXT PRIMARY KEY, sender_id TEXT, sender_name TEXT, sender_type TEXT,
+        platform TEXT DEFAULT 'web', text TEXT, reply_to TEXT, mentions TEXT, ts INTEGER)`);
+      sql.exec(`CREATE TABLE IF NOT EXISTS mutes(
+        identity_id TEXT PRIMARY KEY, until INTEGER, reason TEXT, by_name TEXT)`);
+      sql.exec(`CREATE TABLE IF NOT EXISTS approvals(
+        id TEXT PRIMARY KEY, requester_id TEXT, requester_name TEXT,
+        action TEXT, target_id TEXT, target_name TEXT, reason TEXT,
+        evidence_msg_id TEXT, minutes INTEGER DEFAULT 10, status TEXT DEFAULT 'pending',
+        approver_name TEXT, created INTEGER, expires_at INTEGER)`);
+      sql.exec(`CREATE TABLE IF NOT EXISTS key_inbox(
+        id TEXT PRIMARY KEY, token TEXT, purpose TEXT, created_by TEXT,
+        created INTEGER, status TEXT DEFAULT 'pending')`);
+      sql.exec(`CREATE TABLE IF NOT EXISTS meta(key TEXT PRIMARY KEY, value TEXT)`);
+      // v1 老表升级：补列（列已存在会抛错，直接忽略）
+      for (const [table, col, def] of [
+        ["identities", "platform", "TEXT DEFAULT 'web'"],
+        ["identities", "role", "TEXT DEFAULT 'member'"],
+        ["identities", "bridge", "TEXT DEFAULT ''"],
+        ["identities", "revoked", "INTEGER DEFAULT 0"],
+        ["identities", "last_seen", "INTEGER DEFAULT 0"],
+        ["messages", "platform", "TEXT DEFAULT 'web'"],
+        ["approvals", "minutes", "INTEGER DEFAULT 10"],
+      ]) {
+        try { sql.exec(`ALTER TABLE ${table} ADD COLUMN ${col} ${def}`); } catch { /* 已有该列 */ }
+      }
+      for (const room of DEFAULT_ROOMS) {
+        sql.exec(`INSERT OR IGNORE INTO rooms(slug,name,topic,created) VALUES(?,?,?,?)`,
+          room.slug, room.name, room.topic, Date.now());
+      }
+    });
+  }
+
+  members() {
+    const seen = new Map();
+    for (const ws of this.ctx.getWebSockets()) {
+      try {
+        const a = ws.deserializeAttachment();
+        if (a && a.id && !seen.has(a.id)) seen.set(a.id, { id: a.id, name: a.name, type: a.type, platform: a.platform || "web" });
+      } catch { /* ignore */ }
+    }
+    return [...seen.values()];
+  }
+  broadcast(obj) {
+    const data = JSON.stringify(obj);
+    for (const ws of this.ctx.getWebSockets()) {
+      try { ws.send(data); } catch { /* closed */ }
+    }
+  }
+  checkRate(senderId) {
+    const now = Date.now();
+    const list = (this.rate.get(senderId) || []).filter((t) => now - t < 10000);
+    if (list.length >= 5) return false;
+    list.push(now);
+    this.rate.set(senderId, list);
+    return true;
+  }
+  async isMuted(senderId) {
+    try {
+      const stub = this.env.CHATROOM.get(this.env.CHATROOM.idFromName("__registry__"));
+      const r = await stub.fetch("https://do/registry/is-muted?id=" + encodeURIComponent(senderId));
+      const d = await r.json().catch(() => ({}));
+      return !!d.muted;
+    } catch { return false; }
+  }
+  async storeMessage(sender, text, replyTo) {
+    const sql = this.ctx.storage.sql;
+    const msg = {
+      id: newId("m_"), sender_id: sender.id, sender_name: sender.name,
+      sender_type: sender.type, platform: sender.platform || "web",
+      text, reply_to: replyTo || null,
+      mentions: parseMentions(text), ts: Date.now(),
+    };
+    sql.exec(`INSERT INTO messages(id,sender_id,sender_name,sender_type,platform,text,reply_to,mentions,ts)
+      VALUES(?,?,?,?,?,?,?,?,?)`,
+      msg.id, msg.sender_id, msg.sender_name, msg.sender_type, msg.platform, msg.text,
+      msg.reply_to, JSON.stringify(msg.mentions), msg.ts);
+    sql.exec(`DELETE FROM messages WHERE id NOT IN (SELECT id FROM messages ORDER BY ts DESC LIMIT 200)`);
+    return msg;
+  }
+  // 唯一名字：重名自动加 #2、#3……
+  uniqueName(base) {
+    const sql = this.ctx.storage.sql;
+    const rows = sql.exec(`SELECT name FROM identities WHERE name = ? OR name LIKE ?`, base, base + " #%").toArray();
+    const taken = new Set(rows.map((r) => r.name));
+    if (!taken.has(base)) return base;
+    let n = 2;
+    while (taken.has(`${base} #${n}`)) n++;
+    return `${base} #${n}`;
+  }
+
+  // ---------- 内部：注册表 ----------
+  async registryFetch(request) {
+    const url = new URL(request.url);
+    const sql = this.ctx.storage.sql;
+    const body = request.method === "POST" ? await request.json().catch(() => ({})) : {};
+    const identByToken = (token) => {
+      if (!token) return null;
+      return sql.exec(`SELECT token,id,name,type,platform,role,bridge,rules,revoked,created,last_reply,last_seen FROM identities WHERE token=?`, token).toArray()[0] || null;
+    };
+    const identById = (id) => {
+      if (!id) return null;
+      return sql.exec(`SELECT token,id,name,type,platform,role,bridge,rules,revoked,created,last_reply,last_seen FROM identities WHERE id=?`, id).toArray()[0] || null;
+    };
+    const pub = (row) => row ? { id: row.id, name: row.name, type: row.type, platform: row.platform, role: row.role, bridge: row.bridge, rules: JSON.parse(row.rules || "{}"), revoked: !!row.revoked, created: row.created, last_seen: row.last_seen } : null;
+
+    if (url.pathname === "/registry/identity") {
+      const row = identByToken(url.searchParams.get("token") || "");
+      if (!row) return err("token 无效", 401);
+      return json(pub(row));
+    }
+    if (url.pathname === "/registry/is-muted") {
+      const row = sql.exec(`SELECT until FROM mutes WHERE identity_id=?`, url.searchParams.get("id") || "").toArray()[0];
+      return json({ muted: !!row && row.until > Date.now(), until: row ? row.until : 0 });
+    }
+    if (url.pathname === "/registry/count") {
+      const row = sql.exec(`SELECT COUNT(*) AS n FROM identities`).toArray()[0];
+      return json({ count: row.n });
+    }
+    // 引导：只有 identities 为空且 setup_key 对上时才能建房主
+    if (url.pathname === "/registry/bootstrap" && request.method === "POST") {
+      const n = sql.exec(`SELECT COUNT(*) AS n FROM identities`).toArray()[0].n;
+      if (n > 0) return err("已初始化，引导通道已关闭", 403);
+      if (!this.env.SETUP_KEY || body.setup_key !== this.env.SETUP_KEY) return err("setup_key 不对", 403);
+      const name = String(body.name || "luo").trim().slice(0, 30) || "luo";
+      const token = newToken();
+      const id = newId("u_");
+      sql.exec(`INSERT INTO identities(token,id,name,type,platform,role,bridge,rules,revoked,created) VALUES(?,?,?,?,?,?,?,?,?,?)`,
+        token, id, name, "human", "web", "owner", "", JSON.stringify(defaultRules()), 0, Date.now());
+      return json({ token, id, name, type: "human", role: "owner" });
+    }
+    // 创建 key：房主与 Moderator 可做；Moderator 只能建 member，且 key 进房主私信箱
+    if (url.pathname === "/registry/create-key" && request.method === "POST") {
+      const req = identByToken(String(body.requester_token || ""));
+      if (!req || req.revoked) return err("需要房主或 Moderator 的 Token", 401);
+      if (req.role !== "owner" && req.role !== "moderator") return err("只有房主和 Moderator 能发 key", 403);
+      const name = this.uniqueName(String(body.name || "").trim().slice(0, 30));
+      if (!String(body.name || "").trim()) return err("需要一个名字");
+      const type = ["human", "agent", "bot"].includes(body.type) ? body.type : "agent";
+      const platform = ["web", "wechat", "telegram", "api"].includes(body.platform) ? body.platform : "api";
+      const bridge = ["", "wechat", "telegram"].includes(body.bridge) ? body.bridge : "";
+      // Moderator 只能建普通成员，不能建房主/Moderator，也不能建桥接身份
+      const role = req.role === "owner" && ROLES.includes(body.role) ? body.role : "member";
+      const finalBridge = req.role === "owner" ? bridge : "";
+      const token = newToken();
+      const id = newId("u_");
+      const rules = sanitizeRules(body.rules);
+      sql.exec(`INSERT INTO identities(token,id,name,type,platform,role,bridge,rules,revoked,created) VALUES(?,?,?,?,?,?,?,?,?,?)`,
+        token, id, name, type, platform, role, finalBridge, JSON.stringify(rules), 0, Date.now());
+      const inboxId = newId("k_");
+      sql.exec(`INSERT INTO key_inbox(id,token,purpose,created_by,created,status) VALUES(?,?,?,?,?,?)`,
+        inboxId, token, String(body.purpose || "").slice(0, 120), req.name, Date.now(), "pending");
+      return json({ token, id, name, type, platform, role, bridge: finalBridge, inbox_id: inboxId,
+        note: req.role === "moderator" ? "key 已进房主私信箱，由房主分发" : "key 已生成，请私下发给对方" });
+    }
+    if (url.pathname === "/registry/set-rules" && request.method === "POST") {
+      const row = identByToken(String(body.token || ""));
+      if (!row || row.revoked) return err("token 无效", 401);
+      const rules = sanitizeRules(body.rules);
+      sql.exec(`UPDATE identities SET rules=? WHERE token=?`, JSON.stringify(rules), String(body.token));
+      return json({ rules });
+    }
+    if (url.pathname === "/registry/mark-replied" && request.method === "POST") {
+      sql.exec(`UPDATE identities SET last_reply=? WHERE token=?`, Date.now(), String(body.token || ""));
+      return json({ ok: true });
+    }
+    if (url.pathname === "/registry/touch" && request.method === "POST") {
+      sql.exec(`UPDATE identities SET last_seen=? WHERE token=?`, Date.now(), String(body.token || ""));
+      // 首次使用该 key：私信箱自动标记已分发并删除明文
+      sql.exec(`DELETE FROM key_inbox WHERE token=?`, String(body.token || ""));
+      return json({ ok: true });
+    }
+    // 吊销（内部执行：Worker 已核对房主直接操作或已批准的审批单）
+    if (url.pathname === "/registry/revoke" && request.method === "POST") {
+      const target = identById(String(body.target_id || ""));
+      if (!target) return err("找不到这个身份", 404);
+      if (target.role === "owner") return err("不能吊销房主", 403);
+      sql.exec(`UPDATE identities SET revoked=1 WHERE id=?`, target.id);
+      return json({ ok: true, id: target.id, name: target.name });
+    }
+    if (url.pathname === "/registry/mute" && request.method === "POST") {
+      const target = identById(String(body.target_id || ""));
+      if (!target) return err("找不到这个身份", 404);
+      if (target.role === "owner") return err("不能禁言房主", 403);
+      const minutes = Math.max(1, Math.min(1440, parseInt(body.minutes || "10", 10) || 10));
+      sql.exec(`INSERT OR REPLACE INTO mutes(identity_id,until,reason,by_name) VALUES(?,?,?,?)`,
+        target.id, Date.now() + minutes * 60000, String(body.reason || "").slice(0, 120), String(body.by_name || ""));
+      return json({ ok: true, id: target.id, name: target.name, until: Date.now() + minutes * 60000 });
+    }
+    if (url.pathname === "/registry/unmute" && request.method === "POST") {
+      sql.exec(`DELETE FROM mutes WHERE identity_id=?`, String(body.target_id || ""));
+      return json({ ok: true });
+    }
+    // 发起审批（Moderator；房主不需要审批）
+    if (url.pathname === "/registry/request-action" && request.method === "POST") {
+      const req = identByToken(String(body.requester_token || ""));
+      if (!req || req.revoked || req.role !== "moderator") return err("只有 Moderator 能发起审批", 403);
+      if (!ACTIONS.includes(body.action)) return err("不支持的操作", 400);
+      const id = newId("ap_");
+      const minutes = Math.max(1, Math.min(1440, parseInt(body.minutes || "10", 10) || 10));
+      sql.exec(`INSERT INTO approvals(id,requester_id,requester_name,action,target_id,target_name,reason,evidence_msg_id,minutes,status,created,expires_at)
+        VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+        id, req.id, req.name, body.action, String(body.target_id || ""), String(body.target_name || "").slice(0, 30),
+        String(body.reason || "").slice(0, 200), String(body.evidence_msg_id || ""), minutes, "pending", Date.now(), Date.now() + 24 * 3600 * 1000);
+      return json({ id, status: "pending", expires_at: Date.now() + 24 * 3600 * 1000 });
+    }
+    if (url.pathname === "/registry/get-approval") {
+      const row = sql.exec(`SELECT * FROM approvals WHERE id=?`, url.searchParams.get("id") || "").toArray()[0];
+      if (!row) return err("找不到这张审批单", 404);
+      return json(row);
+    }
+    if (url.pathname === "/registry/set-approval" && request.method === "POST") {
+      sql.exec(`UPDATE approvals SET status=?, approver_name=? WHERE id=?`,
+        String(body.status || ""), String(body.approver_name || ""), String(body.id || ""));
+      return json({ ok: true });
+    }
+    if (url.pathname === "/registry/list-approvals") {
+      const rows = sql.exec(`SELECT * FROM approvals ORDER BY created DESC LIMIT 50`).toArray();
+      return json({ approvals: rows });
+    }
+    if (url.pathname === "/registry/list-key-inbox") {
+      const rows = sql.exec(`SELECT id,token,purpose,created_by,created,status FROM key_inbox ORDER BY created DESC LIMIT 50`).toArray();
+      return json({ inbox: rows });
+    }
+    if (url.pathname === "/registry/distribute-key" && request.method === "POST") {
+      sql.exec(`DELETE FROM key_inbox WHERE id=?`, String(body.id || ""));
+      return json({ ok: true });
+    }
+    if (url.pathname === "/registry/list-identities") {
+      const rows = sql.exec(`SELECT id,name,type,platform,role,bridge,revoked,created,last_seen FROM identities ORDER BY created`).toArray();
+      const mutes = sql.exec(`SELECT identity_id,until FROM mutes`).toArray();
+      const muteMap = Object.fromEntries(mutes.map((m) => [m.identity_id, m.until]));
+      return json({ identities: rows.map((r) => ({ ...r, revoked: !!r.revoked, muted_until: muteMap[r.id] || 0 })) });
+    }
+    if (url.pathname === "/registry/list-agents") {
+      const rows = sql.exec(`SELECT id,name,type,platform,last_seen FROM identities WHERE type IN ('agent','bot') AND revoked=0 ORDER BY last_seen DESC`).toArray();
+      return json({ agents: rows });
+    }
+    if (url.pathname === "/registry/list-rooms") {
+      const rows = sql.exec(`SELECT slug,name,topic FROM rooms ORDER BY rowid`).toArray();
+      return json({ rooms: rows });
+    }
+    if (url.pathname === "/registry/create-room" && request.method === "POST") {
+      const slug = String(body.slug || "").trim().toLowerCase().replace(/[^a-z0-9-]/g, "").slice(0, 30);
+      const name = String(body.name || "").trim().slice(0, 30);
+      if (!slug || !name) return err("房间 id 和名字都要填（id 只用小写字母数字横线）");
+      sql.exec(`INSERT OR IGNORE INTO rooms(slug,name,topic,created) VALUES(?,?,?,?)`,
+        slug, name, String(body.topic || "").slice(0, 120), Date.now());
+      return json({ slug, name });
+    }
+    if (url.pathname === "/registry/stats") {
+      const n = sql.exec(`SELECT COUNT(*) AS n FROM identities WHERE revoked=0`).toArray()[0].n;
+      const m = sql.exec(`SELECT COUNT(*) AS n FROM messages`).toArray()[0].n;
+      const p = sql.exec(`SELECT COUNT(*) AS n FROM approvals WHERE status='pending'`).toArray()[0].n;
+      const k = sql.exec(`SELECT COUNT(*) AS n FROM key_inbox WHERE status='pending'`).toArray()[0].n;
+      return json({ identities: n, messages: m, pending_approvals: p, pending_keys: k });
+    }
+    if (url.pathname === "/registry/meta") {
+      if (request.method === "GET") {
+        const row = sql.exec(`SELECT value FROM meta WHERE key=?`, url.searchParams.get("key") || "").toArray()[0];
+        return json({ value: row ? row.value : null });
+      }
+      sql.exec(`INSERT OR REPLACE INTO meta(key,value) VALUES(?,?)`, String(body.key || ""), String(body.value ?? ""));
+      return json({ ok: true });
+    }
+    return err("unknown registry path", 404);
+  }
+
+  // ---------- 内部：房间 ----------
+  async roomFetch(request) {
+    const url = new URL(request.url);
+    const sql = this.ctx.storage.sql;
+    if (url.pathname === "/room/history") {
+      const limit = Math.max(1, Math.min(100, parseInt(url.searchParams.get("limit") || "50", 10) || 50));
+      const rows = sql.exec(`SELECT * FROM messages ORDER BY ts DESC LIMIT ?`, limit).toArray().reverse();
+      const messages = rows.map((r) => ({ ...r, mentions: JSON.parse(r.mentions || "[]") }));
+      return json({ messages, members: this.members() });
+    }
+    if (url.pathname === "/room/send" && request.method === "POST") {
+      const sender = {
+        id: request.headers.get("x-sender-id") || newId("u_"),
+        name: request.headers.get("x-sender-name") || "匿名",
+        type: request.headers.get("x-sender-type") || "human",
+        platform: request.headers.get("x-sender-platform") || "web",
+      };
+      const body = await request.json().catch(() => ({}));
+      const text = String(body.text || "").trim();
+      if (!text) return err("消息不能为空");
+      if (text.length > 2000) return err("消息太长，最多 2000 字");
+      if (await this.isMuted(sender.id)) return err("你正在禁言中", 403);
+      if (!this.checkRate(sender.id)) return err("发得太快了，10 秒内最多 5 条", 429);
+      const msg = await this.storeMessage(sender, text, String(body.reply_to || "").slice(0, 40) || null);
+      this.broadcast({ type: "message", message: msg, members: this.members() });
+      return json({ message: msg });
+    }
+    if (url.pathname === "/room/system" && request.method === "POST") {
+      const body = await request.json().catch(() => ({}));
+      const msg = await this.storeMessage(
+        { id: "u_system", name: "系统", type: "bot", platform: "web" },
+        String(body.text || "").slice(0, 500), null);
+      this.broadcast({ type: "message", message: msg, members: this.members() });
+      return json({ message: msg });
+    }
+    if (url.pathname === "/room/delete" && request.method === "POST") {
+      const body = await request.json().catch(() => ({}));
+      const senderId = request.headers.get("x-sender-id") || "";
+      const isAdmin = request.headers.get("x-admin") === "1";
+      const row = sql.exec(`SELECT sender_id FROM messages WHERE id=?`, String(body.id || "")).toArray()[0];
+      if (!row) return err("消息不存在", 404);
+      if (!isAdmin && row.sender_id !== senderId) return err("只能撤回自己的消息", 403);
+      sql.exec(`DELETE FROM messages WHERE id=?`, String(body.id));
+      this.broadcast({ type: "delete", id: String(body.id) });
+      return json({ ok: true });
+    }
+    if (url.pathname === "/room/ws") {
+      if (request.headers.get("Upgrade") !== "websocket") return err("需要 WebSocket", 426);
+      const sender = {
+        id: request.headers.get("x-sender-id") || newId("u_"),
+        name: request.headers.get("x-sender-name") || "匿名",
+        type: request.headers.get("x-sender-type") || "human",
+        platform: request.headers.get("x-sender-platform") || "web",
+      };
+      const pair = new WebSocketPair();
+      const [client, server] = Object.values(pair);
+      this.ctx.acceptWebSocket(server);
+      server.serializeAttachment(sender);
+      const history = sql.exec(`SELECT * FROM messages ORDER BY ts DESC LIMIT 50`).toArray().reverse()
+        .map((r) => ({ ...r, mentions: JSON.parse(r.mentions || "[]") }));
+      server.send(JSON.stringify({ type: "history", messages: history, members: this.members(), you: sender }));
+      this.broadcast({ type: "presence", members: this.members() });
+      return new Response(null, { status: 101, webSocket: client });
+    }
+    return err("unknown room path", 404);
+  }
+
+  async fetch(request) {
+    const url = new URL(request.url);
+    try {
+      if (url.pathname.startsWith("/registry/")) return this.registryFetch(request);
+      if (url.pathname.startsWith("/room/")) return this.roomFetch(request);
+      return err("unknown internal path", 404);
+    } catch (e) {
+      return err("内部错误：" + (e && e.message ? e.message : String(e)), 500);
+    }
+  }
+
+  async webSocketMessage(ws, message) {
+    try {
+      const sender = ws.deserializeAttachment();
+      const data = JSON.parse(typeof message === "string" ? message : new TextDecoder().decode(message));
+      if (data.type === "ping") { ws.send(JSON.stringify({ type: "pong" })); return; }
+      if (data.type === "typing") {
+        this.broadcast({ type: "typing", sender_name: sender.name, typing: !!data.typing });
+        return;
+      }
+      if (data.type === "message") {
+        const text = String(data.text || "").trim();
+        if (!text || text.length > 2000) { ws.send(JSON.stringify({ type: "error", error: "消息为空或太长" })); return; }
+        if (await this.isMuted(sender.id)) { ws.send(JSON.stringify({ type: "error", error: "你正在禁言中" })); return; }
+        if (!this.checkRate(sender.id)) { ws.send(JSON.stringify({ type: "error", error: "发得太快了，10 秒内最多 5 条" })); return; }
+        const msg = await this.storeMessage(sender, text, String(data.reply_to || "").slice(0, 40) || null);
+        this.broadcast({ type: "message", message: msg, members: this.members() });
+      }
+    } catch { /* 坏消息直接丢掉 */ }
+  }
+  async webSocketClose() {
+    this.broadcast({ type: "presence", members: this.members() });
+  }
+  async webSocketError() {
+    this.broadcast({ type: "presence", members: this.members() });
+  }
+}
+
+// ---------------- Worker ----------------
+function registryStub(env) { return env.CHATROOM.get(env.CHATROOM.idFromName("__registry__")); }
+function roomStub(env, slug) { return env.CHATROOM.get(env.CHATROOM.idFromName("room:" + slug)); }
+async function regCall(env, path, body) {
+  const r = await registryStub(env).fetch("https://do" + path, body === undefined ? undefined : {
+    method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body),
+  });
+  const d = await r.json().catch(() => ({}));
+  return { status: r.status, data: d };
+}
+async function roomExists(env, slug) {
+  const { data } = await regCall(env, "/registry/list-rooms");
+  return (data.rooms || []).some((x) => x.slug === slug);
+}
+async function authIdentity(env, request, touch = false) {
+  const h = request.headers.get("Authorization") || "";
+  const token = h.startsWith("Bearer ") ? h.slice(7) : "";
+  if (!token) return null;
+  const r = await registryStub(env).fetch("https://do/registry/identity?token=" + encodeURIComponent(token));
+  if (!r.ok) return null;
+  const ident = await r.json();
+  if (ident.revoked) return null;
+  if (touch) regCall(env, "/registry/touch", { token }).catch(() => {});
+  return { ...ident, token };
+}
+async function authQueryToken(env, url) {
+  const token = url.searchParams.get("token") || "";
+  if (!token) return null;
+  const r = await registryStub(env).fetch("https://do/registry/identity?token=" + encodeURIComponent(token));
+  if (!r.ok) return null;
+  const ident = await r.json();
+  if (ident.revoked) return null;
+  return { ...ident, token };
+}
+function needRole(ident, roles) {
+  if (!ident) return err("需要 Bearer token", 401);
+  if (!roles.includes(ident.role)) return err("权限不足，需要 " + roles.join("/"), 403);
+  return null;
+}
+async function systemMsg(env, room, text) {
+  try {
+    await roomStub(env, room).fetch("https://do/room/system", {
+      method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ text }),
+    });
+  } catch { /* 忽略 */ }
+}
+// 执行一张已批准的审批单（房主点批准时调用）
+async function executeApproval(env, ap, approverName) {
+  const targetName = ap.target_name || ap.target_id;
+  if (ap.action === "mute") {
+    const { status, data } = await regCall(env, "/registry/mute", {
+      target_id: ap.target_id, minutes: ap.minutes || 10, reason: ap.reason, by_name: ap.requester_name,
+    });
+    if (status !== 200) return { ok: false, error: data.error || "禁言失败" };
+    await systemMsg(env, "general", `小管家申请禁言 ${targetName}（${ap.minutes || 10} 分钟），房主 ${approverName} 已批准并执行。`);
+  } else if (ap.action === "kick" || ap.action === "revoke-key") {
+    const { status, data } = await regCall(env, "/registry/revoke", { target_id: ap.target_id });
+    if (status !== 200) return { ok: false, error: data.error || "执行失败" };
+    await systemMsg(env, "general", `小管家申请${ap.action === "kick" ? "踢出" : "吊销 key"} ${targetName}，房主 ${approverName} 已批准并执行。`);
+  } else if (ap.action === "delete") {
+    // target_id 存的是消息 id；证据在哪个房需要查：先在 general 试，再试其他房
+    const { data } = await regCall(env, "/registry/list-rooms");
+    let done = false;
+    for (const room of (data.rooms || [])) {
+      const r = await roomStub(env, room.slug).fetch("https://do/room/delete", {
+        method: "POST", headers: { "content-type": "application/json", "x-sender-id": "", "x-admin": "1" },
+        body: JSON.stringify({ id: ap.target_id }),
+      });
+      if (r.ok) { done = true; break; }
+    }
+    if (!done) return { ok: false, error: "找不到那条消息，可能已被删除" };
+    await systemMsg(env, "general", `小管家申请删除一条消息，房主 ${approverName} 已批准并执行。`);
+  }
+  await regCall(env, "/registry/set-approval", { id: ap.id, status: "executed", approver_name: approverName });
+  return { ok: true };
+}
+
+const MOD_NAME = "Moderator";
+const MOD_ID = "u_moderator";
+const NEURON_BUDGET = 2000;
+const NEURON_PER_REPLY = 15;
+
+async function handleModeratorScan(env) {
+  if (!env.AI) return;
+  try {
+    const today = new Date().toISOString().slice(0, 10);
+    const dateRow = await regCall(env, "/registry/meta?key=neurons_date");
+    const usedRow = await regCall(env, "/registry/meta?key=neurons_used");
+    let used = 0;
+    if (dateRow.data.value !== today) {
+      await regCall(env, "/registry/meta", { key: "neurons_date", value: today });
+      await regCall(env, "/registry/meta", { key: "neurons_used", value: "0" });
+    } else {
+      used = parseInt(usedRow.data.value || "0", 10) || 0;
+    }
+    if (used >= NEURON_BUDGET) return;
+    const { data } = await regCall(env, "/registry/list-rooms");
+    for (const room of (data.rooms || [])) {
+      const r = await roomStub(env, room.slug).fetch("https://do/room/history?limit=50");
+      const h = await r.json().catch(() => ({ messages: [] }));
+      const msgs = h.messages || [];
+      const wmRow = await regCall(env, "/registry/meta?key=mod_wm_" + room.slug);
+      const wm = parseInt(wmRow.data.value || "0", 10) || 0;
+      const answered = new Set(msgs.filter((m) => m.sender_id === MOD_ID).map((m) => m.reply_to));
+      const targets = msgs.filter((m) =>
+        m.ts > wm && m.sender_id !== MOD_ID &&
+        (m.mentions || []).some((x) => x === MOD_NAME || x === "小管家") &&
+        !answered.has(m.id)).sort((a, b) => a.ts - b.ts).slice(0, 3);
+      let maxTs = wm;
+      for (const q of targets) {
+        maxTs = Math.max(maxTs, q.ts);
+        if (used >= NEURON_BUDGET) break;
+        const context = msgs.slice(-10).map((m) => `${m.sender_name}：${m.text}`).join("\n");
+        let reply = "";
+        // 建 key 请求：走 Moderator 的 create-key，key 只进房主私信箱
+        const keyMatch = q.text.match(/(?:为|給|给)\s*(\S+?)\s*(?:建|创建|申请)(?:个)?\s*key/i) || q.text.match(/(?:建|创建|申请)(?:个)?\s*key.*?给\s*(\S+)/i);
+        if (keyMatch && env.MODERATOR_TOKEN) {
+          const name = keyMatch[1].replace(/^@/, "").slice(0, 30);
+          const { status } = await regCall(env, "/registry/create-key", {
+            requester_token: env.MODERATOR_TOKEN, name, type: "agent", platform: "api",
+            purpose: `@${q.sender_name} 请求建 key`,
+          });
+          reply = status === 200
+            ? `@${q.sender_name} 已为 ${name} 建好 key，发到房主私信箱了，房主会私下发给对方。`
+            : `@${q.sender_name} 建 key 失败，原因我这边没权限或名字不对，已转给房主处理。`;
+        } else if (keyMatch) {
+          reply = `@${q.sender_name} 建 key 需要 Moderator 的 Token，我这边还没配好，已转给房主处理。`;
+        } else {
+          const ai = await env.AI.run("@cf/meta/llama-3.1-8b-instruct", {
+            messages: [
+              { role: "system", content: "你是 ai-chatroom 聊天室的小管家 Moderator。用中文简短回答，只回答房间规则、加入方法（需要房主或 Moderator 发的 Token，一号一 key）、邀请码互换、回复规则设置这四类问题。不知道就说不知道并转给房主，不要编造。最多 150 字。" },
+              { role: "user", content: `最近的聊天记录：\n${context}\n\n${q.sender_name} 问：${q.text}\n请回答。` },
+            ],
+          });
+          reply = String((ai && ai.response) || "").trim().slice(0, 500) || `@${q.sender_name} 这个问题我答不上来，已转给房主。`;
+          if (!reply.startsWith("@")) reply = `@${q.sender_name} ` + reply;
+        }
+        await roomStub(env, room.slug).fetch("https://do/room/send", {
+          method: "POST",
+          headers: { "content-type": "application/json", "x-sender-id": MOD_ID, "x-sender-name": MOD_NAME, "x-sender-type": "bot", "x-sender-platform": "web" },
+          body: JSON.stringify({ text: reply, reply_to: q.id }),
+        });
+        used += NEURON_PER_REPLY;
+        await regCall(env, "/registry/meta", { key: "neurons_used", value: String(used) });
+      }
+      if (maxTs > wm) await regCall(env, "/registry/meta", { key: "mod_wm_" + room.slug, value: String(maxTs) });
+    }
+  } catch { /* 小管家出错就休息，不影响聊天 */ }
+}
+
+export default {
+  async fetch(request, env) {
+    const url = new URL(request.url);
+    if (request.method === "OPTIONS") {
+      return new Response(null, { headers: {
+        "access-control-allow-origin": "*", "access-control-allow-methods": "GET,POST,PUT,DELETE,OPTIONS",
+        "access-control-allow-headers": "Authorization,Content-Type" } });
+    }
+    const bodyJson = async () => request.json().catch(() => ({}));
+    try {
+      if (url.pathname === "/api/health") return json({ ok: true, service: "ai-chatroom", version: "2.4", free_tier: "workers + durable-objects sqlite + workers-ai" });
+      if (url.pathname === "/api/rooms" && request.method === "GET") {
+        const { data } = await regCall(env, "/registry/list-rooms");
+        return json(data);
+      }
+      if (url.pathname === "/api/agents" && request.method === "GET") {
+        const { data } = await regCall(env, "/registry/list-agents");
+        return json(data);
+      }
+      // ---- 引导：建房主（仅 identities 为空时有效）----
+      if (url.pathname === "/api/admin/bootstrap" && request.method === "POST") {
+        const body = await bodyJson();
+        const { status, data } = await regCall(env, "/registry/bootstrap", body);
+        return json(data, status);
+      }
+      // ---- 管理 ----
+      if (url.pathname === "/api/admin/create-key" && request.method === "POST") {
+        const me = await authIdentity(env, request);
+        const e = needRole(me, ["owner", "moderator"]);
+        if (e) return e;
+        const body = await bodyJson();
+        const { status, data } = await regCall(env, "/registry/create-key", { ...body, requester_token: me.token });
+        return json(data, status);
+      }
+      if (url.pathname === "/api/admin/key-inbox" && request.method === "GET") {
+        const me = await authIdentity(env, request);
+        const e = needRole(me, ["owner"]);
+        if (e) return e;
+        const { data } = await regCall(env, "/registry/list-key-inbox");
+        return json(data);
+      }
+      if (url.pathname === "/api/admin/distribute-key" && request.method === "POST") {
+        const me = await authIdentity(env, request);
+        const e = needRole(me, ["owner"]);
+        if (e) return e;
+        const body = await bodyJson();
+        const { status, data } = await regCall(env, "/registry/distribute-key", body);
+        return json(data, status);
+      }
+      if (url.pathname === "/api/admin/approvals" && request.method === "GET") {
+        const me = await authIdentity(env, request);
+        const e = needRole(me, ["owner", "moderator"]);
+        if (e) return e;
+        const { data } = await regCall(env, "/registry/list-approvals");
+        return json(data);
+      }
+      if (url.pathname === "/api/admin/request-action" && request.method === "POST") {
+        const me = await authIdentity(env, request);
+        const e = needRole(me, ["moderator"]);
+        if (e) return e;
+        const body = await bodyJson();
+        const { status, data } = await regCall(env, "/registry/request-action", { ...body, requester_token: me.token });
+        if (status === 200) await systemMsg(env, "general", `小管家申请${{ mute: "禁言", kick: "踢出", delete: "删除消息", "revoke-key": "吊销 key" }[body.action] || "操作"} ${body.target_name || ""}，理由：${(body.reason || "").slice(0, 100)}。等房主批准。`);
+        return json(data, status);
+      }
+      if (url.pathname === "/api/admin/approve" && request.method === "POST") {
+        const me = await authIdentity(env, request);
+        const e = needRole(me, ["owner"]);
+        if (e) return e;
+        const body = await bodyJson();
+        const { data } = await regCall(env, "/registry/get-approval?id=" + encodeURIComponent(body.approval_id || ""));
+        if (!data || !data.id) return err("找不到这张审批单", 404);
+        if (data.status !== "pending") return err("这张单子已经处理过了（" + data.status + "）", 400);
+        if (data.expires_at < Date.now()) {
+          await regCall(env, "/registry/set-approval", { id: data.id, status: "expired", approver_name: me.name });
+          return err("审批单已过期（24 小时）", 400);
+        }
+        const res = await executeApproval(env, data, me.name);
+        if (!res.ok) return err(res.error, 400);
+        return json({ ok: true, action: data.action });
+      }
+      if (url.pathname === "/api/admin/reject" && request.method === "POST") {
+        const me = await authIdentity(env, request);
+        const e = needRole(me, ["owner"]);
+        if (e) return e;
+        const body = await bodyJson();
+        await regCall(env, "/registry/set-approval", { id: body.approval_id, status: "rejected", approver_name: me.name });
+        return json({ ok: true });
+      }
+      if (url.pathname === "/api/admin/revoke-key" && request.method === "POST") {
+        const me = await authIdentity(env, request);
+        const e = needRole(me, ["owner"]);
+        if (e) return e;
+        const body = await bodyJson();
+        const { status, data } = await regCall(env, "/registry/revoke", body);
+        if (status === 200) await systemMsg(env, "general", `房主吊销了 ${data.name} 的 key。`);
+        return json(data, status);
+      }
+      if (url.pathname === "/api/admin/mute" && request.method === "POST") {
+        const me = await authIdentity(env, request);
+        const e = needRole(me, ["owner"]);
+        if (e) return e;
+        const body = await bodyJson();
+        const { status, data } = await regCall(env, "/registry/mute", { ...body, by_name: me.name });
+        return json(data, status);
+      }
+      if (url.pathname === "/api/admin/unmute" && request.method === "POST") {
+        const me = await authIdentity(env, request);
+        const e = needRole(me, ["owner"]);
+        if (e) return e;
+        const body = await bodyJson();
+        const { status, data } = await regCall(env, "/registry/unmute", body);
+        return json(data, status);
+      }
+      if (url.pathname === "/api/admin/kick" && request.method === "POST") {
+        const me = await authIdentity(env, request);
+        const e = needRole(me, ["owner"]);
+        if (e) return e;
+        const body = await bodyJson();
+        const { status, data } = await regCall(env, "/registry/revoke", body);
+        if (status === 200) await systemMsg(env, "general", `房主踢出了 ${data.name}（key 已吊销）。`);
+        return json(data, status);
+      }
+      if (url.pathname === "/api/admin/delete-message" && request.method === "POST") {
+        const me = await authIdentity(env, request);
+        const e = needRole(me, ["owner"]);
+        if (e) return e;
+        const body = await bodyJson();
+        if (!(await roomExists(env, body.room))) return err("房间不存在", 404);
+        const r = await roomStub(env, body.room).fetch("https://do/room/delete", {
+          method: "POST", headers: { "content-type": "application/json", "x-sender-id": "", "x-admin": "1" },
+          body: JSON.stringify({ id: body.message_id }),
+        });
+        return json(await r.json(), r.status);
+      }
+      if (url.pathname === "/api/admin/identities" && request.method === "GET") {
+        const me = await authIdentity(env, request);
+        const e = needRole(me, ["owner", "moderator"]);
+        if (e) return e;
+        const { data } = await regCall(env, "/registry/list-identities");
+        return json(data);
+      }
+      if (url.pathname === "/api/admin/stats" && request.method === "GET") {
+        const me = await authIdentity(env, request);
+        const e = needRole(me, ["owner"]);
+        if (e) return e;
+        const { data } = await regCall(env, "/registry/stats");
+        return json(data);
+      }
+      if (url.pathname === "/api/rooms" && request.method === "POST") {
+        const me = await authIdentity(env, request);
+        const e = needRole(me, ["owner"]);
+        if (e) return e;
+        const body = await bodyJson();
+        const { status, data } = await regCall(env, "/registry/create-room", body);
+        return json(data, status);
+      }
+      // ---- 我的身份 ----
+      if (url.pathname === "/api/identities/me" && request.method === "GET") {
+        const ident = await authIdentity(env, request);
+        if (!ident) return err("需要 Bearer token", 401);
+        return json({ id: ident.id, name: ident.name, type: ident.type, platform: ident.platform, role: ident.role, rules: ident.rules });
+      }
+      if (url.pathname === "/api/identities/me/rules" && request.method === "PUT") {
+        const ident = await authIdentity(env, request);
+        if (!ident) return err("需要 Bearer token", 401);
+        const body = await bodyJson();
+        const { status, data } = await regCall(env, "/registry/set-rules", { token: ident.token, rules: body });
+        return json(data, status);
+      }
+      if (url.pathname === "/api/evaluate" && request.method === "POST") {
+        const ident = await authIdentity(env, request);
+        if (!ident) return err("需要 Bearer token", 401);
+        const body = await bodyJson();
+        const msg = {
+          sender_id: String(body.sender_id || ""), sender_name: String(body.sender_name || ""),
+          sender_type: String(body.sender_type || "human"), text: String(body.text || ""),
+          mentions: Array.isArray(body.mentions) ? body.mentions : parseMentions(String(body.text || "")),
+        };
+        const decision = evaluateRules(ident.rules, msg, { id: ident.id, name: ident.name });
+        return json({ ...decision, platform: body.platform || "", cooldown_seconds: (ident.rules || {}).cooldown_seconds ?? 30, you: ident.name });
+      }
+      // ---- 房间消息 / 桥接 / WS ----
+      const m = url.pathname.match(/^\/api\/rooms\/([a-z0-9-]+)\/(messages|ws|delete|bridge-message)$/);
+      if (m) {
+        const slug = m[1];
+        if (!(await roomExists(env, slug))) return err("房间不存在", 404);
+        const stub = roomStub(env, slug);
+        if (m[2] === "messages" && request.method === "GET") {
+          const me = await authIdentity(env, request);
+          if (!me) return err("需要 Bearer token", 401);
+          const r = await stub.fetch("https://do/room/history?limit=" + encodeURIComponent(url.searchParams.get("limit") || "50"));
+          return json(await r.json(), r.status);
+        }
+        if (m[2] === "messages" && request.method === "POST") {
+          const me = await authIdentity(env, request, true);
+          if (!me) return err("需要 Bearer token", 401);
+          const bodyText = await request.text();
+          const r = await stub.fetch("https://do/room/send", {
+            method: "POST",
+            headers: { "content-type": "application/json", "x-sender-id": me.id, "x-sender-name": me.name, "x-sender-type": me.type, "x-sender-platform": me.platform },
+            body: bodyText,
+          });
+          return json(await r.json(), r.status);
+        }
+        if (m[2] === "delete" && request.method === "POST") {
+          const me = await authIdentity(env, request);
+          if (!me) return err("需要 Bearer token", 401);
+          const bodyText = await request.text();
+          const r = await stub.fetch("https://do/room/delete", {
+            method: "POST",
+            headers: { "content-type": "application/json", "x-sender-id": me.id },
+            body: bodyText,
+          });
+          return json(await r.json(), r.status);
+        }
+        if (m[2] === "bridge-message" && request.method === "POST") {
+          const me = await authIdentity(env, request);
+          if (!me || !me.bridge) return err("需要桥接身份的 Token", 401);
+          const body = await bodyJson();
+          const platform = String(body.platform || "");
+          if (platform !== me.bridge) return err("桥接身份与 platform 不符", 403);
+          const senderName = String(body.sender_name || "").trim().slice(0, 30);
+          const senderType = ["human", "agent", "bot"].includes(body.sender_type) ? body.sender_type : "human";
+          if (!senderName || !String(body.text || "").trim()) return err("sender_name 和 text 都要填", 400);
+          const senderId = "ext_" + platform + "_" + (await sha12(platform + ":" + senderName));
+          const r = await stub.fetch("https://do/room/send", {
+            method: "POST",
+            headers: { "content-type": "application/json", "x-sender-id": senderId, "x-sender-name": senderName, "x-sender-type": senderType, "x-sender-platform": platform },
+            body: JSON.stringify({ text: body.text, reply_to: body.reply_to || null }),
+          });
+          return json(await r.json(), r.status);
+        }
+        if (m[2] === "ws") {
+          const me = await authQueryToken(env, url);
+          if (!me) return err("需要 Token 才能加入（?token=…）", 401);
+          regCall(env, "/registry/touch", { token: me.token }).catch(() => {});
+          const r = await stub.fetch("https://do/room/ws", {
+            headers: {
+              Upgrade: "websocket",
+              "x-sender-id": me.id, "x-sender-name": me.name, "x-sender-type": me.type, "x-sender-platform": me.platform,
+            },
+          });
+          return r;
+        }
+      }
+      if (url.pathname.startsWith("/api/")) return err("unknown api", 404);
+      if (env.ASSETS) return env.ASSETS.fetch(request);
+      return new Response("ai-chatroom", { headers: { "content-type": "text/plain" } });
+    } catch (e) {
+      return err("Worker 错误：" + (e && e.message ? e.message : String(e)), 500);
+    }
+  },
+
+  async scheduled(controller, env, ctx) {
+    ctx.waitUntil(handleModeratorScan(env));
+  },
+};

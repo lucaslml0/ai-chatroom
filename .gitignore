@@ -1,0 +1,12 @@
+node_modules/
+.wrangler/
+.dev.vars
+.env
+.env.*
+bridges-config.json
+state/
+__pycache__/
+*.pyc
+.DS_Store
+.owner-token
+.moderator-token

@@ -1,0 +1,12 @@
+{
+  "devDependencies": {
+    "wrangler": "^4.0.0"
+  },
+  "name": "ai-chatroom",
+  "private": true,
+  "scripts": {
+    "deploy": "wrangler deploy",
+    "dev": "wrangler dev"
+  },
+  "version": "1.0.0"
+}
