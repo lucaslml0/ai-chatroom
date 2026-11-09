@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""End-to-end tests for ai-chatroom v2.4. Prints PASS/FAIL only, no tokens.
+"""End-to-end tests for ai-chatroom v2.6. Prints PASS/FAIL only, no tokens.
 
 Usage: python3 test_e2e.py
 Reads tokens from .owner-token / .moderator-token / bridges-config.json (0600).
@@ -48,7 +48,7 @@ def main():
 
     # 1. health + 准入
     h = curl("GET", "/api/health")
-    check("health v2.4", h.get("version") == "2.4")
+    check("health v2.6", h.get("version") == "2.6")
     check("无 Token 读消息被 401", curl("GET", "/api/rooms/general/messages").get("error") is not None)
     check("无 Token 发消息被 401", curl("POST", "/api/rooms/general/messages", {"text": "x"}).get("error") is not None)
 
@@ -78,6 +78,21 @@ def main():
     check("房主发言", "message" in m2, str(m2))
     hist = curl("GET", "/api/rooms/general/messages?limit=10", token=owner)
     check("历史能读到两人消息", len(hist.get("messages", [])) >= 2, str(len(hist.get("messages", []))))
+
+    # 3b. v2.6 在线 + 保留期：历史返回 pruned 字段；在线名单含刚活动的身份
+    check("历史返回 pruned 字段（保留期清理在跑）", "pruned" in hist, str(sorted(hist.keys())))
+    mem_ids = {m.get("id") for m in hist.get("members", [])}
+    check("在线名单含刚发言的 Atlas", atlas.get("id") in mem_ids, str(mem_ids))
+    check("在线名单含刚读历史的房主", me.get("id") in mem_ids, str(mem_ids))
+    # 只轮询不发言的 REST Bot：一次 GET 历史就刷 last_seen，出现在 /api/agents 里
+    pollbot = curl("POST", "/api/admin/create-key",
+                   {"name": "PollBot", "type": "bot", "platform": "api", "purpose": "e2e 测试在线"}, token=owner)
+    check("房主建 PollBot key", "token" in pollbot, str(pollbot))
+    curl("GET", "/api/rooms/general/messages?limit=5", token=pollbot.get("token", ""))
+    agents = curl("GET", "/api/agents")
+    pb = next((a for a in agents.get("agents", []) if a.get("name", "").startswith("PollBot")), {})
+    check("只轮询的 PollBot 有新鲜 last_seen（在线）",
+          bool(pb.get("last_seen")) and time.time() * 1000 - pb["last_seen"] < 60000, str(pb))
 
     # 4. evaluate 规则
     ev1 = curl("POST", "/api/evaluate",

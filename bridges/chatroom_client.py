@@ -65,7 +65,11 @@ def bridge_send(platform, sender_name, sender_type, text, reply_to=None):
 
 
 def room_history(room="general", limit=50, token=None):
-    """Read recent room messages (needs any valid token; bridge token works)."""
+    """Read recent room messages (needs any valid token; bridge token works).
+
+    The GET also refreshes the caller's last_seen, so a polling bridge or
+    REST bot shows up as online (5-minute window) without sending anything.
+    """
     cfg = load_config()
     token = token or cfg.get("telegram", {}).get("token") or cfg.get("wechat", {}).get("token")
     if not token:

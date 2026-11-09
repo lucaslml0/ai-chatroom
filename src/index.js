@@ -1,7 +1,9 @@
 // ai-chatroom v2 — Cloudflare Workers + Durable Objects (SQLite, free tier)
-// PLAN.md v2.4: Token 准入、一号一 key；房主最高权限；Moderator 风险操作
+// PLAN.md v2.4 + v2.6: Token 准入、一号一 key；房主最高权限；Moderator 风险操作
 // （禁言/踢人/删消息/吊销 key）需房主批准；Moderator 可建 key 并私发房主；
 // Moderator 只回 @Moderator 的消息（Workers AI 小管家，见 scheduled 处理）。
+// v2.6：聊天记录默认只保存 7 天（到期自动清理）；在线名单含 WS 连接者 +
+// 5 分钟内有活动的 Agent/Bot/桥接；聊天框「清空显示」只清本地视图。
 // 免费额度：Workers 10万请求/天；DO SQLite 10万请求/天 + 13000 GB-s/天；
 // Workers AI 10000 neurons/天（小管家日预算 2000）。
 
@@ -25,6 +27,11 @@ export function defaultRules() {
 const MODES = ["humans_only", "mentions_only", "all", "keywords", "none"];
 const ROLES = ["owner", "moderator", "member"];
 const ACTIONS = ["mute", "kick", "delete", "revoke-key"];
+
+// v2.6：聊天记录默认只保存 7 天（meta retention_days 可改，1–90 天）；
+// 在线窗口 5 分钟：WS 连接者 + 5 分钟内有活动的身份都算在线。
+const RETENTION_DAYS_DEFAULT = 7;
+const ONLINE_WINDOW_MS = 5 * 60 * 1000;
 
 // 回复规则引擎：服务端 /api/evaluate 与前端、Python 示例共用同一逻辑。
 export function evaluateRules(rules, msg, self) {
@@ -122,6 +129,7 @@ export class ChatRoom {
         id TEXT PRIMARY KEY, token TEXT, purpose TEXT, created_by TEXT,
         created INTEGER, status TEXT DEFAULT 'pending')`);
       sql.exec(`CREATE TABLE IF NOT EXISTS meta(key TEXT PRIMARY KEY, value TEXT)`);
+      sql.exec(`CREATE INDEX IF NOT EXISTS messages_ts_idx ON messages(ts)`);
       // v1 老表升级：补列（列已存在会抛错，直接忽略）
       for (const [table, col, def] of [
         ["identities", "platform", "TEXT DEFAULT 'web'"],
@@ -149,6 +157,23 @@ export class ChatRoom {
         if (a && a.id && !seen.has(a.id)) seen.set(a.id, { id: a.id, name: a.name, type: a.type, platform: a.platform || "web" });
       } catch { /* ignore */ }
     }
+    return [...seen.values()];
+  }
+  // 在线名单：WS 连接者 + 5 分钟内有活动的身份（REST 轮询的 Agent/Bot、
+  // 微信/Telegram 桥接、值班的 Atlas 都算）。已吊销的不算。
+  // 注意：身份只存在注册表 DO 里，房间 DO 自己的 identities 表是空的，
+  // 所以最近活跃名单要问注册表（和 isMuted 一样的内部调用）。
+  async presence() {
+    const seen = new Map();
+    for (const m of this.members()) seen.set(m.id, { ...m, bridge: "" });
+    try {
+      const stub = this.env.CHATROOM.get(this.env.CHATROOM.idFromName("__registry__"));
+      const r = await stub.fetch("https://do/registry/list-online?since=" + (Date.now() - ONLINE_WINDOW_MS));
+      const d = await r.json().catch(() => ({}));
+      for (const x of (d.online || [])) {
+        if (!seen.has(x.id)) seen.set(x.id, { id: x.id, name: x.name, type: x.type, platform: x.platform || "web", bridge: x.bridge || "" });
+      }
+    } catch { /* 注册表读不到就只返回 WS 成员 */ }
     return [...seen.values()];
   }
   broadcast(obj) {
@@ -185,8 +210,22 @@ export class ChatRoom {
       VALUES(?,?,?,?,?,?,?,?,?)`,
       msg.id, msg.sender_id, msg.sender_name, msg.sender_type, msg.platform, msg.text,
       msg.reply_to, JSON.stringify(msg.mentions), msg.ts);
-    sql.exec(`DELETE FROM messages WHERE id NOT IN (SELECT id FROM messages ORDER BY ts DESC LIMIT 200)`);
+    this.pruneOldMessages();
     return msg;
+  }
+  // 保留期清理：默认 7 天；meta retention_days 可改（1–90 天）。返回清理条数。
+  pruneOldMessages() {
+    const sql = this.ctx.storage.sql;
+    let days = RETENTION_DAYS_DEFAULT;
+    try {
+      const row = sql.exec(`SELECT value FROM meta WHERE key='retention_days'`).toArray()[0];
+      const n = parseInt(row ? row.value : "", 10);
+      if (Number.isFinite(n)) days = Math.max(1, Math.min(90, n));
+    } catch { /* 读不到就用默认 */ }
+    const cutoff = Date.now() - days * 24 * 3600 * 1000;
+    const n = sql.exec(`SELECT COUNT(*) AS n FROM messages WHERE ts < ?`, cutoff).toArray()[0].n;
+    if (n > 0) sql.exec(`DELETE FROM messages WHERE ts < ?`, cutoff);
+    return n;
   }
   // 唯一名字：重名自动加 #2、#3……
   uniqueName(base) {
@@ -346,6 +385,13 @@ export class ChatRoom {
       const rows = sql.exec(`SELECT id,name,type,platform,last_seen FROM identities WHERE type IN ('agent','bot') AND revoked=0 ORDER BY last_seen DESC`).toArray();
       return json({ agents: rows });
     }
+    // v2.6 在线：房间 DO 调这个拿最近活跃的身份（房间 DO 自己的 identities 表是空的，
+    // 身份只存在注册表 DO 里）。since=毫秒时间戳，只返回 last_seen 大于它的、未吊销的。
+    if (url.pathname === "/registry/list-online") {
+      const since = parseInt(url.searchParams.get("since") || "0", 10) || 0;
+      const rows = sql.exec(`SELECT id,name,type,platform,bridge FROM identities WHERE last_seen > ? AND revoked=0`, since).toArray();
+      return json({ online: rows });
+    }
     if (url.pathname === "/registry/list-rooms") {
       const rows = sql.exec(`SELECT slug,name,topic FROM rooms ORDER BY rowid`).toArray();
       return json({ rooms: rows });
@@ -381,10 +427,11 @@ export class ChatRoom {
     const url = new URL(request.url);
     const sql = this.ctx.storage.sql;
     if (url.pathname === "/room/history") {
+      const pruned = this.pruneOldMessages();
       const limit = Math.max(1, Math.min(100, parseInt(url.searchParams.get("limit") || "50", 10) || 50));
       const rows = sql.exec(`SELECT * FROM messages ORDER BY ts DESC LIMIT ?`, limit).toArray().reverse();
       const messages = rows.map((r) => ({ ...r, mentions: JSON.parse(r.mentions || "[]") }));
-      return json({ messages, members: this.members() });
+      return json({ messages, members: await this.presence(), pruned });
     }
     if (url.pathname === "/room/send" && request.method === "POST") {
       const sender = {
@@ -400,7 +447,7 @@ export class ChatRoom {
       if (await this.isMuted(sender.id)) return err("你正在禁言中", 403);
       if (!this.checkRate(sender.id)) return err("发得太快了，10 秒内最多 5 条", 429);
       const msg = await this.storeMessage(sender, text, String(body.reply_to || "").slice(0, 40) || null);
-      this.broadcast({ type: "message", message: msg, members: this.members() });
+      this.broadcast({ type: "message", message: msg, members: await this.presence() });
       return json({ message: msg });
     }
     if (url.pathname === "/room/system" && request.method === "POST") {
@@ -408,7 +455,7 @@ export class ChatRoom {
       const msg = await this.storeMessage(
         { id: "u_system", name: "系统", type: "bot", platform: "web" },
         String(body.text || "").slice(0, 500), null);
-      this.broadcast({ type: "message", message: msg, members: this.members() });
+      this.broadcast({ type: "message", message: msg, members: await this.presence() });
       return json({ message: msg });
     }
     if (url.pathname === "/room/delete" && request.method === "POST") {
@@ -434,10 +481,11 @@ export class ChatRoom {
       const [client, server] = Object.values(pair);
       this.ctx.acceptWebSocket(server);
       server.serializeAttachment(sender);
+      this.pruneOldMessages();
       const history = sql.exec(`SELECT * FROM messages ORDER BY ts DESC LIMIT 50`).toArray().reverse()
         .map((r) => ({ ...r, mentions: JSON.parse(r.mentions || "[]") }));
-      server.send(JSON.stringify({ type: "history", messages: history, members: this.members(), you: sender }));
-      this.broadcast({ type: "presence", members: this.members() });
+      server.send(JSON.stringify({ type: "history", messages: history, members: await this.presence(), you: sender }));
+      this.presence().then((m) => this.broadcast({ type: "presence", members: m })).catch(() => {});
       return new Response(null, { status: 101, webSocket: client });
     }
     return err("unknown room path", 404);
@@ -469,15 +517,15 @@ export class ChatRoom {
         if (await this.isMuted(sender.id)) { ws.send(JSON.stringify({ type: "error", error: "你正在禁言中" })); return; }
         if (!this.checkRate(sender.id)) { ws.send(JSON.stringify({ type: "error", error: "发得太快了，10 秒内最多 5 条" })); return; }
         const msg = await this.storeMessage(sender, text, String(data.reply_to || "").slice(0, 40) || null);
-        this.broadcast({ type: "message", message: msg, members: this.members() });
+        this.broadcast({ type: "message", message: msg, members: await this.presence() });
       }
     } catch { /* 坏消息直接丢掉 */ }
   }
   async webSocketClose() {
-    this.broadcast({ type: "presence", members: this.members() });
+    this.presence().then((m) => this.broadcast({ type: "presence", members: m })).catch(() => {});
   }
   async webSocketError() {
-    this.broadcast({ type: "presence", members: this.members() });
+    this.presence().then((m) => this.broadcast({ type: "presence", members: m })).catch(() => {});
   }
 }
 
@@ -589,7 +637,7 @@ async function handleModeratorScan(env, report) {
         m.ts > wm && m.sender_id !== MOD_ID &&
         (m.mentions || []).some((x) => x === MOD_NAME || x === "小管家") &&
         !answered.has(m.id)).sort((a, b) => a.ts - b.ts).slice(0, 3);
-      report && report.push(`room ${room.slug}: ${msgs.length} msgs, wm=${wm}, targets=${targets.length}`);
+      report && report.push(`room ${room.slug}: ${msgs.length} msgs, wm=${wm}, targets=${targets.length}, pruned=${h.pruned || 0}`);
       let maxTs = wm;
       for (const q of targets) {
         maxTs = Math.max(maxTs, q.ts);
@@ -636,6 +684,8 @@ async function handleModeratorScan(env, report) {
       }
       if (maxTs > wm) await regCall(env, "/registry/meta", { key: "mod_wm_" + room.slug, value: String(maxTs) });
     }
+    // 小管家在线：Cron 在跑就把 Moderator 的 last_seen 刷一下，它会出现在在线名单里。
+    if (env.MODERATOR_TOKEN) regCall(env, "/registry/touch", { token: env.MODERATOR_TOKEN }).catch(() => {});
   } catch (e) {
     report && report.push(`scan error: ${e && e.message ? e.message : String(e)}`);
   }
@@ -651,7 +701,7 @@ export default {
     }
     const bodyJson = async () => request.json().catch(() => ({}));
     try {
-      if (url.pathname === "/api/health") return json({ ok: true, service: "ai-chatroom", version: "2.4", free_tier: "workers + durable-objects sqlite + workers-ai" });
+      if (url.pathname === "/api/health") return json({ ok: true, service: "ai-chatroom", version: "2.6", free_tier: "workers + durable-objects sqlite + workers-ai" });
       if (url.pathname === "/api/rooms" && request.method === "GET") {
         const { data } = await regCall(env, "/registry/list-rooms");
         return json(data);
@@ -847,7 +897,9 @@ export default {
         if (!(await roomExists(env, slug))) return err("房间不存在", 404);
         const stub = roomStub(env, slug);
         if (m[2] === "messages" && request.method === "GET") {
-          const me = await authIdentity(env, request);
+          // v2.6：读历史也刷 last_seen——REST 轮询的 Agent/Bot 与桥接
+          // 靠这一刷出现在在线名单里（5 分钟窗口）。
+          const me = await authIdentity(env, request, true);
           if (!me) return err("需要 Bearer token", 401);
           const r = await stub.fetch("https://do/room/history?limit=" + encodeURIComponent(url.searchParams.get("limit") || "50"));
           return json(await r.json(), r.status);

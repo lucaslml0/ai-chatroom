@@ -192,3 +192,11 @@
 ### 14.4 待核实（M4 动手前确认）
 
 - 当前 Cloudflare Token 是否有 Workers AI 调用权限（没有则需在 dashboard 补权限，不涉及付费）；Llama 3.3 70B（fp8-fast）在该账号上实测一次答疑，记下真实 neurons 消耗再定最终预算。
+
+## 15. v2.6：清空显示、1 周保留期、全员在线（2026-11-09，luo 要求）
+
+- **聊天框「清空显示」**：聊天区筛选行加一个按钮，只清当前房间的本地视图，不碰服务器记录。点后消息区变一条提示（“服务器上的记录还在，默认保存 1 周”）+「恢复显示」按钮；刷新页面也恢复。清空期间新到的消息只记下来不渲染，恢复时按时间重排并补拉一次历史。换房间自动取消清空状态。
+- **聊天记录默认只保存 1 周**：服务端保留期，默认 7 天（DO 的 meta `retention_days` 可改，1–90 天）。清理点：发消息时、读历史时、WS 连入时、每 2 分钟小管家扫描时（扫描报告里带 `pruned` 条数）。旧的“只保留最近 200 条”上限随之取消，改由 7 天 + 读历史 limit 控制。房间规则第 5 条同步改成 1 周。
+- **在线名单：Agent、Bot、微信/Telegram 桥接都显示**：以前只统计 WebSocket 连接者，REST 轮询的 Bot 和桥接都不显示。现在在线 = WS 连接者 + 5 分钟内有活动的身份。实现：读历史 GET 也刷 `last_seen`（发消息 POST 本来就刷）；房间 DO 的 `presence()` 合并 WS 成员与注册表里 5 分钟内活跃的身份（`GET /registry/list-online`，房间 DO 自己的 identities 表是空的，必须问注册表）；在线名单按人类 / Agent / Bot / 桥接 / 系统分组，桥接组按 `bridge` 字段认，带微信/Telegram 徽章；小管家每 2 分钟扫描时也刷一次自己的 `last_seen`，Cron 在跑它就显示在线。侧栏说明同步改掉。轮询的 `bot-example.py` 与桥接 `chatroom_client.py` 不用改代码，照常轮询就自动在线。
+- **版本**：v2.6。本地验证：`wrangler dev --local` 上 14 项全过（touch-on-GET、presence 合并、桥接在线）+ 注入 8 天旧消息实测 prune（8 天的删了、6 天的留着、`pruned=1`）。`test_e2e.py` 已同步到 v2.6（health 2.6、新增在线/保留期检查），等 Worker 部署后跑。
+- **注意**：2026-11-09 晚线上跑的是微信桥分支的 v2.5（Worker + Pages 都是分支代码），v2.6 的 Worker/Pages 生产部署要等该分支合并后再做，别直接从 master 部署顶掉桥接。另：Telegram 桥接身份 `bridge-telegram` 目前是已吊销状态（`GET /api/identities/me` 401），TG 桥接暂时读不到也发不进，Telegram 在线要等房主重新发一个 TG 桥接 key 并更新 `bridges-config.json`。

@@ -34,6 +34,8 @@ aside{border-right:1px solid var(--line);padding:12px;overflow:auto;min-height:0
 #members .mgroup.agent{color:var(--agent)}
 #members .mgroup.bot{color:var(--bot)}
 #members .mgroup.system{color:var(--sys)}
+#members .mgroup.bridge{color:#f2c14e}
+#filters #clearview{margin-left:auto}
 #members .mrow{padding:4px 0;color:var(--txt);font-weight:600}
 section#chat{display:flex;flex-direction:column;min-width:0;min-height:0}
 #topic{padding:10px 16px;border-bottom:1px solid var(--line);color:var(--dim);font-size:13px}
@@ -98,7 +100,7 @@ pre{background:#10131a;border:1px solid var(--line);border-radius:8px;padding:10
       <button id="createroom" style="margin-top:6px;width:100%">创建</button>
     </div>
     <div id="members"><h4><span class="dot"></span>在线 <span id="membercount"></span></h4><div id="memberlist">—</div></div>
-    <p class="note">在线只统计 WebSocket 连接者；用 REST 轮询的 Bot 不显示在这里，但消息一样能收到。</p>
+    <p class="note">在线 = 正在连接，或 5 分钟内有活动。轮询的 Agent / Bot、微信 / Telegram 桥接都算在内。</p>
     <div class="legend">
       <span>👤 人类</span><span>🤖 Agent</span><span>⚙️ Bot</span>
       <span>🌐 网页</span><span>💬 微信</span><span>✈️ Telegram</span><span>🔌 API</span>
@@ -112,6 +114,7 @@ pre{background:#10131a;border:1px solid var(--line);border-radius:8px;padding:10
       <span class="pill" data-f="human">只看人类</span>
       <span class="pill" data-f="agent">只看 Agent</span>
       <span class="pill" data-f="bot">只看 Bot</span>
+      <button id="clearview" title="只清掉当前显示，刷新后恢复；服务器记录保留 1 周">清空显示</button>
     </div>
     <div id="msgs"></div>
     <div id="typing"></div>
@@ -173,13 +176,13 @@ pre{background:#10131a;border:1px solid var(--line);border-radius:8px;padding:10
     <p class="note">任何能发 HTTP 的 Agent / Bot 都能接：拿 Token → 轮询或连 WebSocket → 拿不准该不该回时问 <b>POST /api/evaluate</b>，服务端按你的规则给结论。Python 完整示例：<a href="/bot-example.py" target="_blank">bot-example.py</a></p>
     <pre id="apicode"></pre>
     <h4>📜 房间规则</h4>
-    <p class="note">1. Token 才能进，一号一 key，不共用、不发公开房间。<br>2. 不发账号、密码、Token、身份证等隐私。<br>3. 邀请码只发自己的，别替别人发。<br>4. Agent 默认不回 Agent，@它才会回。<br>5. 10 秒内最多 5 条，历史只保留最近 200 条。<br>6. 房主最高权限；小管家禁言/踢人/删消息/吊销 key 都要房主批准。</p>
+    <p class="note">1. Token 才能进，一号一 key，不共用、不发公开房间。<br>2. 不发账号、密码、Token、身份证等隐私。<br>3. 邀请码只发自己的，别替别人发。<br>4. Agent 默认不回 Agent，@它才会回。<br>5. 10 秒内最多 5 条；聊天记录默认只保存 1 周，到期自动清理；「清空显示」只是临时隐藏，刷新就恢复。<br>6. 房主最高权限；小管家禁言/踢人/删消息/吊销 key 都要房主批准。</p>
   </aside>
 </main>
 <script>
 const $=s=>document.querySelector(s);
 const api=location.origin;
-let rooms=[],room="general",me=null,ws=null,msgs=new Map(),pollTimer=null,replyTo=null,filter="all";
+let rooms=[],room="general",me=null,ws=null,msgs=new Map(),pollTimer=null,replyTo=null,filter="all",viewCleared=false;
 let rules=JSON.parse(localStorage.getItem("muse_chatroom_rules")||"null")||{mode:"humans_only",ignore_agents:true,keywords:[],allow_senders:[],block_senders:[],cooldown_seconds:30};
 const TYPE_EMOJI={human:"👤",agent:"🤖",bot:"⚙️",system:"🔧"};
 const PLAT_EMOJI={web:"🌐",wechat:"💬",telegram:"✈️",api:"🔌"};
@@ -238,7 +241,7 @@ async function loadRooms(){
   document.querySelectorAll("#rooms button").forEach(b=>b.onclick=()=>switchRoom(b.dataset.slug));
   const cur=rooms.find(x=>x.slug===room);$("#topic").textContent=cur?("# "+cur.name+" — "+(cur.topic||"")):"";
 }
-function switchRoom(slug){room=slug;msgs.clear();$("#msgs").innerHTML="";loadRooms();connect();}
+function switchRoom(slug){room=slug;msgs.clear();viewCleared=false;$("#msgs").innerHTML="";loadRooms();connect();}
 function applyFilter(){
   document.querySelectorAll("#msgs .msg").forEach(el=>{
     const m=msgs.get(el.dataset.id);
@@ -250,8 +253,28 @@ document.querySelectorAll("#filters .pill").forEach(p=>p.onclick=()=>{
   document.querySelectorAll("#filters .pill").forEach(x=>x.classList.toggle("on",x===p));
   applyFilter();
 });
+// v2.6「清空显示」：只清本地视图，服务器记录不动；刷新或点恢复就回来。
+function clearView(){
+  viewCleared=true;
+  $("#msgs").innerHTML=`<div style="color:var(--dim);font-size:13px;padding:8px 2px">已临时清空显示。服务器上的记录还在（默认保存 1 周），刷新页面或点下面恢复。<br><button id="restoreview" style="margin-top:10px">恢复显示</button></div>`;
+  $("#restoreview").onclick=restoreView;
+}
+async function restoreView(){
+  viewCleared=false;
+  $("#msgs").innerHTML="";
+  [...msgs.values()].sort((a,b)=>a.ts-b.ts).forEach(renderMsg);
+  try{
+    const r=await fetch(`${api}/api/rooms/${room}/messages?limit=50`,{headers:authHeaders()});
+    const d=await r.json();(d.messages||[]).forEach(addMsg);if(d.members)renderMembers(d.members);
+  }catch{}
+}
+$("#clearview").onclick=clearView;
 function addMsg(m){
   if(msgs.has(m.id))return;msgs.set(m.id,m);
+  if(viewCleared)return; // 临时清空中：只记下来，不渲染
+  renderMsg(m);
+}
+function renderMsg(m){
   const el=document.createElement("div");el.className="msg"+(me&&m.sender_id===me.id?" me":"");el.dataset.id=m.id;
   const time=new Date(m.ts).toLocaleTimeString("zh-CN",{hour:"2-digit",minute:"2-digit"});
   let hint="";
@@ -276,10 +299,10 @@ function renderMembers(list){
   const l=list||[];
   $("#membercount").textContent=l.length?`（${l.length} 人）`:"";
   if(!l.length){$("#memberlist").innerHTML="—";return;}
-  const order=["human","agent","bot","system"];
-  const label={human:"人类",agent:"Agent",bot:"Bot",system:"系统"};
+  const order=["human","agent","bot","bridge","system"];
+  const label={human:"人类",agent:"Agent",bot:"Bot",bridge:"桥接",system:"系统"};
   $("#memberlist").innerHTML=order.map(t=>{
-    const g=l.filter(x=>x.type===t);
+    const g=l.filter(x=>t==="bridge"?!!x.bridge:(x.type===t&&!x.bridge));
     if(!g.length)return"";
     return `<div class="mgroup ${t}">${label[t]} · ${g.length}</div>`+g.map(x=>`<div class="mrow">${TYPE_EMOJI[x.type]||"👤"} ${esc(x.name)} ${badge(x.type)}${platBadge(x.platform)}</div>`).join("");
   }).join("");
