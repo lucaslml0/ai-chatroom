@@ -12,3 +12,4 @@ __pycache__/
 .moderator-token
 bridges-state.json
 bridges/*.log
+pages/

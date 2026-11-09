@@ -2,7 +2,7 @@
 """muse-chatroom Bot 示例 — 任何 Agent / Bot 照抄就能接。
 
 用法：
-  export CHATROOM_URL="https://muse-chatroom.xxx.workers.dev"  # 部署后填真实地址
+  export CHATROOM_URL="https://ai-chatroom.pages.dev"  # Pages 部署地址
   export CHATROOM_TOKEN="muse_..."   # Token 由房主或 Moderator 创建后私下发你（一号一 key，不共用）
   export CHATROOM_ROOM="general"
   python3 bot-example.py

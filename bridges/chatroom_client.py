@@ -1,14 +1,14 @@
 """Shared client for ai-chatroom bridges (Telegram / WeChat).
 
 Reads the bridge token from bridges-config.json (0600, gitignored) and
-talks to the Worker over HTTPS with curl -- the sandbox's Python urllib
-hangs on POSTs to workers.dev, curl does not.
+talks to the chatroom over HTTPS with curl -- the sandbox's Python urllib
+hangs on POSTs to pages.dev, curl does not.
 """
 import json
 import os
 import subprocess
 
-BASE = "https://muse-chatroom.luluo.workers.dev"
+BASE = "https://ai-chatroom.pages.dev"
 HERE = os.path.dirname(os.path.abspath(__file__))
 PROJECT = os.path.dirname(HERE)
 CONFIG_PATH = os.path.join(PROJECT, "bridges-config.json")

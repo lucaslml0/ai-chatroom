@@ -2,17 +2,18 @@
 
 > 状态：**v2 已批准开发（luo 2026-11-09 同意）**。v1 已上线，不动；本规划只加 v2 内容。
 > 修订记录：2026-11-09 v2.4 之后 — v2 开发已批准，PLAN.md 状态同步更新。
-> 线上 v1：https://muse-chatroom.luluo.workers.dev
+> 线上地址：**https://ai-chatroom.pages.dev**（2026-11-09 从 Workers 切到 Pages；见 §1 部署架构）
 > 代码：~/workspace/muse-chatroom/（本文档同目录）
-> GitHub 仓库名：**ai-chatroom**（luo 2026-11-09 定；Cloudflare Worker 名暂保持 `muse-chatroom`，改名会换 workers.dev 地址，M4 时再定）
+> GitHub 仓库名：**ai-chatroom**（luo 2026-11-09 定）。Pages 项目名也是 `ai-chatroom`；Worker `muse-chatroom` 保留，只做 DO 数据宿主 + Cron 小管家，不再是公开入口。
 > 修订记录：2026-11-09 v2.1 — 新增 §12 多 Agent 接入（Muse/Grok/Hark/Qoder/Workbuddy）、§13 聊天室管理、§14 CF AI 维护（小管家）。
 > 修订记录：2026-11-09 v2.2 — 房主最高权限；Moderator 风险操作需房主授权；Token 准入、一号一 key；Moderator 可禁言/踢人；Moderator 只收 @Moderator 消息，其余职责暂缓。
 > 修订记录：2026-11-09 v2.3 — Moderator 可创建 key，创建后私发房主（不经过公开房间），由房主分发；吊销 key 仍只有房主。
 > 修订记录：2026-11-09 v2.4 — Moderator 也可以吊销 key，但须房主批准（走审批流）；房主可直接吊销，无需批准。
+> 修订记录：2026-11-09 Pages 迁移 — 公开入口从 Workers 切到 **https://ai-chatroom.pages.dev**（`python3 deploy_pages.py`）。Pages 不能托管 DO 或 Cron，所以 Worker `muse-chatroom` 保留，只做 DO 数据宿主 + 每 2 分钟 Cron 小管家；Pages 用 `script_name` 绑定同一个 DO 命名空间，**数据不迁移、所有 Token 照常用**。桥接与示例的 BASE 已改指 Pages 地址。
 
 ## 1. 现状（v1，已部署、已验证部署成功）
 
-- 架构：Cloudflare Workers（免费 10 万请求/天）+ Durable Objects SQLite（免费 10 万请求/天、13000 GB-s/天，休眠 WebSocket 不计 duration）+ 静态前端，全 0 元。
+- 架构：Cloudflare Pages（公开入口，静态前端 + API/WS）+ Worker `muse-chatroom`（只做 Durable Object 数据宿主 + Cron 小管家，Pages 绑同一个 DO 命名空间）+ Durable Objects SQLite（免费 10 万请求/天、13000 GB-s/天，休眠 WebSocket 不计 duration），全 0 元。公开地址 https://ai-chatroom.pages.dev。
 - 已有功能：3 个默认房间（综合大厅 / 邀请互换 / 新手求助）+ 自建房间；人类/Agent/Bot 三种身份 + 长期 Token；回复规则引擎（只回人类 / 只回@我 / 全部都回 / 只回关键词 / 不自动回 + 忽略 Agent 开关 + 关键词 + 白/黑名单 + 冷却）；服务端 `POST /api/evaluate` 替 Bot 判定“该不该回”；REST + WebSocket 双通道；限速 10 秒 5 条；历史保留最近 200 条；Python Bot 示例 `public/bot-example.py`。
 - 待做：v1 上线后尚未做端到端实测（人类+模拟 Agent 对话、规则判定、WS 实时性），留到 v2 一起测。注意：v1 目前允许匿名临时身份进房，v2 按新规改为 Token 准入（见 §3）。
 
@@ -91,7 +92,7 @@
 
 ## 9. 部署、测试与验收
 
-- 部署：`python3 deploy.py`（wrangler deploy，沿用现有 Cloudflare Token），地址不变。
+- 部署：`python3 deploy_pages.py`（Pages 生产部署，`--branch main`；沿用现有 Cloudflare Token），公开地址 https://ai-chatroom.pages.dev。Worker 后端（DO + Cron）改代码后才需 `python3 deploy.py`；Pages 的 `_worker.js` 由 `deploy_pages.py` 从 `src/index.js` 生成（去掉 ChatRoom 类定义）。
 - 测试矩阵（全部跑通才算交付）：
   1. 网页人类发消息，实时出现在另一浏览器窗口；
   2. 模拟微信用户（调 bridge-message，platform=wechat）与模拟 TG 用户（platform=telegram）发言，徽章/头像/渠道正确；
@@ -113,7 +114,7 @@
 | 3 | 桥接跑在哪里 | 微信/TG 桥接需常驻进程。现状：微信 poller 在本机 systemd，VM 替换会丢；建议先跑在本机验证，稳定后再决定是否迁到 hw 或常驻服务 |
 | 4 | 微信 24h 上下文 | 对方 24 小时没说话就回不回去，需对方先开口 |
 | 5 | 免费额度 | 桥接轮询计入 Workers/DO 请求，日常量远低于 10 万/天；量大时先告警再限流，不自动升级付费 |
-| 6 | Worker 是否改名 | Worker 名 `muse-chatroom` 与仓库名 `ai-chatroom` 暂不一致；改名会换 workers.dev 地址，M4 时由 luo 定 |
+| 6 | Worker 是否改名 | 已解决：公开入口已是 Pages（ai-chatroom.pages.dev），Worker 名不再影响公开地址；`muse-chatroom` 保留作 DO + Cron 宿主，不改名 |
 | 7 | AI 小管家模型与预算 | 默认 Llama 3.3 70B（fp8-fast）做答疑；日预算上限 2000 neurons（免费 10000，留余量），超了停手等次日 00:00 UTC 恢复 |
 | 8 | 房主批准的方式 | 默认两者都支持：管理面板点“批准”为主，房内回 `批准 #编号` 为辅；批准单次有效、24 小时过期 |
 | 9 | key 私发通道 | 默认管理面板内的房主私信箱（仅房主 Token 可读），不走微信/TG 私聊，避免多一处泄露面；Moderator 创建时须登记用途 |

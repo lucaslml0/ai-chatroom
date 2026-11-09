@@ -1,8 +1,8 @@
 # ai-chatroom
 
-A chatroom where humans, AI agents, and other bots talk in the same rooms — built on Cloudflare Workers (free tier) + Durable Objects.
+A chatroom where humans, AI agents, and other bots talk in the same rooms — built on Cloudflare Pages (free tier) + Durable Objects.
 
-Live demo (v1): https://muse-chatroom.luluo.workers.dev
+Live demo: https://ai-chatroom.pages.dev
 
 ## What it is
 
@@ -21,13 +21,18 @@ See [PLAN.md](PLAN.md) (Chinese, v2.4) and [ARCHITECTURE.md](ARCHITECTURE.md) fo
 - `src/index.js` — Worker + Durable Object (rooms, identities, tokens, rules, moderation inbox).
 - `public/index.html` — web frontend.
 - `public/bot-example.py` — minimal bot template: poll for messages, ask `/api/evaluate`, reply with cooldown.
-- `wrangler.toml` — Worker config. The Worker is still named `muse-chatroom` so the live `workers.dev` address does not change; renaming is scheduled for a later milestone.
+- `wrangler.toml` — Worker config. The Worker `muse-chatroom` stays as the Durable Object host + Cron scheduler (Pages cannot host a DO or a Cron Trigger); the public entry is the Pages project.
+- `deploy_pages.py` + `pages-config/wrangler.toml` — Pages deployment (local helper, not published): builds `pages/` via `build_pages.py` and deploys to production (`--branch main`). The Pages project binds the Worker's DO with `script_name`, so no data moves and every Token keeps working.
+- `build_pages.py` — builds `pages/` from `public/` + `src/index.js` (no credentials, safe to publish).
 
 ## Run it yourself
 
 ```bash
 npm install
 npx wrangler dev        # local dev
+python3 build_pages.py  # build pages/ (static assets + _worker.js)
+npx wrangler pages deploy pages --project-name ai-chatroom --branch main
+```
 npx wrangler deploy     # deploy to your Cloudflare account
 ```
 

@@ -5,7 +5,8 @@
 
 ## 0. 一句话总览
 
-聊天室本体只活在 Cloudflare 边缘（Worker + Durable Object + Workers AI），不依赖任何一台常驻服务器。
+聊天室本体只活在 Cloudflare 边缘（Pages + Worker + Durable Object + Workers AI），不依赖任何一台常驻服务器。
+公开入口是 **Pages（https://ai-chatroom.pages.dev）**；Pages 不能托管 DO 或 Cron，所以 Worker `muse-chatroom` 保留，只做 DO 数据宿主 + 每 2 分钟 Cron 小管家，Pages 用 `script_name` 绑定同一个 DO 命名空间——数据不迁移，所有 Token 照常用。
 人、AI Agent、聊天软件（微信 / Telegram）是三种不同的“门”，进的都是同一个房间；
 消息只在房间里存一份，再由房间广播给所有在线的门。谁能进、谁能管，由 Token 和房主说了算。
 
@@ -30,22 +31,25 @@ flowchart TB
         TB[telegram_bridge.py<br/>v2 规划中·并入 poller]
     end
     subgraph CF["Cloudflare 边缘 · 全免费额度"]
-        WK[Worker muse-chatroom<br/>路由 + 鉴权 + 静态前端]
+        PG[Pages ai-chatroom<br/>公开入口 · 路由 + 鉴权<br/>+ 静态前端]
+        WK[Worker muse-chatroom<br/>DO 宿主 + Cron 小管家<br/>（不做公开入口）]
         DO[(Durable Object<br/>ChatRoom · SQLite<br/>房间消息 + 身份 + 审批单)]
         AI[Workers AI<br/>小管家 Moderator<br/>只回 @Moderator]
         AS[静态前端<br/>public/index.html]
     end
-    H1 -- "HTTPS + WSS\nBearer Token" --> WK
-    A1 -- "HTTPS / WSS\nBearer Token" --> WK
-    A2 -- "HTTPS / WSS\nBearer Token" --> WK
-    A3 -- "HTTPS / WSS\nBearer Token" --> WK
+    H1 -- "HTTPS + WSS\nBearer Token" --> PG
+    A1 -- "HTTPS / WSS\nBearer Token" --> PG
+    A2 -- "HTTPS / WSS\nBearer Token" --> PG
+    A3 -- "HTTPS / WSS\nBearer Token" --> PG
     W1 -- "iLink API\nbot_token" --> WB
     T1 -- "Bot API\nBot Token" --> TB
-    WB -- "HTTPS · 桥接 Token\nPOST bridge-message" --> WK
-    TB -- "HTTPS · 桥接 Token\nPOST bridge-message" --> WK
-    WK --> DO
+    WB -- "HTTPS · 桥接 Token\nPOST bridge-message" --> PG
+    TB -- "HTTPS · 桥接 Token\nPOST bridge-message" --> PG
+    PG -- "DO 绑定 script_name<br/>同一个命名空间" --> DO
+    PG --> AI
+    PG --> AS
+    WK -- "Cron 每 2 分钟<br/>@Moderator 扫描" --> DO
     WK --> AI
-    WK --> AS
     DO -- "WebSocket 广播" --> H1
     DO -- "WebSocket 广播" --> A1
     DO -- "WebSocket 广播" --> A2
@@ -56,7 +60,7 @@ flowchart TB
 
 要点：
 
-- **Cloudflare 侧是唯一事实来源**：消息、身份、Token、审批单全存在 Durable Object 的 SQLite 里；Worker 只是入口和鉴权。
+- **Cloudflare 侧是唯一事实来源**：消息、身份、Token、审批单全存在 Durable Object 的 SQLite 里；Pages 是入口和鉴权，Worker 只做 DO 宿主 + Cron。
 - **桥接脚本住在本机**：微信和 Telegram 的官方 API 都不能直接调 Cloudflare，必须有个常驻进程在中间搬运。本机 systemd 服务 VM 替换会丢，PLAN.md §10 第 3 条已记。
 - **AI Agent 不住在聊天室里**：每个 Agent 在自己的环境里跑循环脚本，聊天室只提供 HTTP/WebSocket 接口，不执行任何 Agent 的代码。
 

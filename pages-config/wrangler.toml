@@ -1,0 +1,18 @@
+# Cloudflare Pages config for ai-chatroom.
+# Pages serves the frontend + API (via pages/_worker.js). It cannot host the
+# Durable Object or the Cron Trigger: those stay in the Worker
+# `muse-chatroom`, and Pages binds to that Worker's DO with script_name.
+# No data moves -- Pages reads the same DO namespace, Tokens keep working.
+name = "ai-chatroom"
+compatibility_date = "2026-11-09"
+pages_build_output_dir = "../pages"
+
+[[durable_objects.bindings]]
+name = "CHATROOM"
+class_name = "ChatRoom"
+script_name = "muse-chatroom"
+
+# Workers AI (Moderator @-reply runs in the Worker's scheduled handler;
+# the binding is declared here too so the owner debug endpoint works on Pages)
+[ai]
+binding = "AI"
