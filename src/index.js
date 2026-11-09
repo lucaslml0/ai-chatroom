@@ -5,6 +5,9 @@
 // 免费额度：Workers 10万请求/天；DO SQLite 10万请求/天 + 13000 GB-s/天；
 // Workers AI 10000 neurons/天（小管家日预算 2000）。
 
+// 微信桥 Worker 公开地址（部署 ai-chatroom-wechat 后填；为空时绑定码只给 join 链接，不给 QR）。
+export const WECHAT_BRIDGE_URL = "https://ai-chatroom-wechat.luluo.workers.dev";
+
 export const DEFAULT_ROOMS = [
   { slug: "general", name: "综合大厅", topic: "随便聊，Muse 使用心得、邀请互换都从这里开始" },
   { slug: "muse-exchange", name: "邀请互换", topic: "新用户互邀、换 token、分享邀请码（只发自己的邀请，别发账号密码）" },
@@ -121,6 +124,10 @@ export class ChatRoom {
       sql.exec(`CREATE TABLE IF NOT EXISTS key_inbox(
         id TEXT PRIMARY KEY, token TEXT, purpose TEXT, created_by TEXT,
         created INTEGER, status TEXT DEFAULT 'pending')`);
+      sql.exec(`CREATE TABLE IF NOT EXISTS wechat_bindings(
+        wechat_id TEXT PRIMARY KEY, identity_id TEXT, wechat_name TEXT, bound_at INTEGER)`);
+      sql.exec(`CREATE TABLE IF NOT EXISTS wechat_bind_codes(
+        code TEXT PRIMARY KEY, identity_id TEXT, created INTEGER, expires_at INTEGER, used INTEGER DEFAULT 0)`);
       sql.exec(`CREATE TABLE IF NOT EXISTS meta(key TEXT PRIMARY KEY, value TEXT)`);
       // v1 老表升级：补列（列已存在会抛错，直接忽略）
       for (const [table, col, def] of [
@@ -341,6 +348,64 @@ export class ChatRoom {
       const mutes = sql.exec(`SELECT identity_id,until FROM mutes`).toArray();
       const muteMap = Object.fromEntries(mutes.map((m) => [m.identity_id, m.until]));
       return json({ identities: rows.map((r) => ({ ...r, revoked: !!r.revoked, muted_until: muteMap[r.id] || 0 })) });
+    }
+    // ---------- 微信绑定（DO 内：身份事实源） ----------
+    // 绑定码：6 位大写字母数字，密码学随机，单次有效，24 小时过期。
+    // 字母表去掉 0/1/I/O，避免用户照着抄时认错（仍是 6 位大写字母数字）。
+    const BIND_CODE_ALPHABET = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
+    function newBindCode() {
+      const b = new Uint8Array(6);
+      crypto.getRandomValues(b);
+      return [...b].map((x) => BIND_CODE_ALPHABET[x % BIND_CODE_ALPHABET.length]).join("");
+    }
+    // 生成绑定码：房主专用；body 用 {token: 新 key 的 token} 或 {identity_id} 二选一。
+    if (url.pathname === "/registry/wechat-bind-code" && request.method === "POST") {
+      const req = identByToken(String(body.requester_token || ""));
+      if (!req || req.revoked || req.role !== "owner") return err("只有房主能生成微信绑定码", 403);
+      const target = body.token ? identByToken(String(body.token)) : identById(String(body.identity_id || ""));
+      if (!target || target.revoked) return err("找不到这个身份，或 key 已被吊销", 404);
+      // 一个 identity 同一时间只留一个有效码：旧的未用码作废。
+      sql.exec(`DELETE FROM wechat_bind_codes WHERE identity_id=? AND used=0`, target.id);
+      const code = newBindCode();
+      const expiresAt = Date.now() + 24 * 3600 * 1000;
+      sql.exec(`INSERT INTO wechat_bind_codes(code,identity_id,created,expires_at,used) VALUES(?,?,?,?,0)`,
+        code, target.id, Date.now(), expiresAt);
+      return json({ code, identity_id: target.id, identity_name: target.name, expires_at: expiresAt });
+    }
+    // 微信绑定：桥接身份调用；校验码（存在、未使用、未过期）→ 写映射 → 标记已用。
+    if (url.pathname === "/registry/wechat-bind" && request.method === "POST") {
+      const code = String(body.code || "").toUpperCase().trim();
+      const row = sql.exec(`SELECT * FROM wechat_bind_codes WHERE code=?`, code).toArray()[0];
+      if (!row) return err("绑定码不存在", 404);
+      if (row.used) return err("绑定码已使用或已作废", 400);
+      if (row.expires_at < Date.now()) return err("绑定码已过期", 400);
+      const target = identById(row.identity_id);
+      if (!target || target.revoked) return err("这个 key 已被吊销", 403);
+      const wechatId = String(body.wechat_id || "").trim();
+      if (!wechatId) return err("缺少 wechat_id", 400);
+      // 一个 wechat_id 同一时间只绑一个 identity；重复绑定新 key 时替换旧映射。
+      sql.exec(`INSERT OR REPLACE INTO wechat_bindings(wechat_id,identity_id,wechat_name,bound_at) VALUES(?,?,?,?)`,
+        wechatId, target.id, String(body.wechat_name || wechatId).slice(0, 60), Date.now());
+      sql.exec(`UPDATE wechat_bind_codes SET used=1 WHERE code=?`, code);
+      return json({ identity: { id: target.id, name: target.name, type: target.type } });
+    }
+    // 按 wechat_id 解析绑定身份（bridge-message 用；身份被吊销返回 null）。
+    if (url.pathname === "/registry/wechat-resolve") {
+      const wechatId = url.searchParams.get("wechat_id") || "";
+      const b = sql.exec(`SELECT identity_id FROM wechat_bindings WHERE wechat_id=?`, wechatId).toArray()[0];
+      if (!b) return json({ identity: null });
+      const target = identById(b.identity_id);
+      if (!target || target.revoked) return json({ identity: null });
+      return json({ identity: { id: target.id, name: target.name, type: target.type } });
+    }
+    if (url.pathname === "/registry/wechat-bindings") {
+      const rows = sql.exec(`SELECT b.wechat_id, b.wechat_name, b.bound_at, i.id AS identity_id, i.name AS identity_name, i.type AS identity_type, i.platform AS identity_platform FROM wechat_bindings b LEFT JOIN identities i ON i.id=b.identity_id ORDER BY b.bound_at DESC`).toArray();
+      return json({ bindings: rows });
+    }
+    // 解绑：删映射，key 本身不吊销；解绑后该微信用户退回访客身份。
+    if (url.pathname === "/registry/wechat-unbind" && request.method === "POST") {
+      sql.exec(`DELETE FROM wechat_bindings WHERE wechat_id=?`, String(body.wechat_id || ""));
+      return json({ ok: true });
     }
     if (url.pathname === "/registry/list-agents") {
       const rows = sql.exec(`SELECT id,name,type,platform,last_seen FROM identities WHERE type IN ('agent','bot') AND revoked=0 ORDER BY last_seen DESC`).toArray();
@@ -651,7 +716,7 @@ export default {
     }
     const bodyJson = async () => request.json().catch(() => ({}));
     try {
-      if (url.pathname === "/api/health") return json({ ok: true, service: "ai-chatroom", version: "2.4", free_tier: "workers + durable-objects sqlite + workers-ai" });
+      if (url.pathname === "/api/health") return json({ ok: true, service: "ai-chatroom", version: "2.5", free_tier: "workers + durable-objects sqlite + workers-ai" });
       if (url.pathname === "/api/rooms" && request.method === "GET") {
         const { data } = await regCall(env, "/registry/list-rooms");
         return json(data);
@@ -807,6 +872,40 @@ export default {
         await handleModeratorScan(env, report);
         return json({ report });
       }
+      // ---- 微信绑定 ----
+      if (url.pathname === "/api/admin/wechat-bind-code" && request.method === "POST") {
+        const me = await authIdentity(env, request);
+        const e = needRole(me, ["owner"]);
+        if (e) return e;
+        const body = await bodyJson();
+        const { status, data } = await regCall(env, "/registry/wechat-bind-code", { ...body, requester_token: me.token });
+        if (status !== 200) return json(data, status);
+        const joinUrl = `https://ai-chatroom.pages.dev/wechat-join?code=${data.code}`;
+        return json({ ...data, join_url: joinUrl, qr_url: WECHAT_BRIDGE_URL ? `${WECHAT_BRIDGE_URL}/qr?code=${data.code}` : null });
+      }
+      if (url.pathname === "/api/bridge/bind-wechat" && request.method === "POST") {
+        const me = await authIdentity(env, request);
+        if (!me || me.bridge !== "wechat") return err("需要微信桥接身份的 Token", 401);
+        const body = await bodyJson();
+        const { status, data } = await regCall(env, "/registry/wechat-bind", body);
+        return json(data, status);
+      }
+      if (url.pathname === "/api/bridge/wechat-bindings" && request.method === "GET") {
+        const me = await authIdentity(env, request);
+        if (!me) return err("需要 Bearer token", 401);
+        // 房主看管理面板；微信桥看列表做回推路由（列表里没有密钥，只有名字与微信 id）。
+        if (me.role !== "owner" && me.bridge !== "wechat") return err("只有房主或微信桥能看绑定列表", 403);
+        const { data } = await regCall(env, "/registry/wechat-bindings");
+        return json(data);
+      }
+      const unbindMatch = url.pathname.match(/^\/api\/bridge\/wechat-binding\/(.+)$/);
+      if (unbindMatch && request.method === "DELETE") {
+        const me = await authIdentity(env, request);
+        const e = needRole(me, ["owner"]);
+        if (e) return e;
+        const { status, data } = await regCall(env, "/registry/wechat-unbind", { wechat_id: decodeURIComponent(unbindMatch[1]) });
+        return json(data, status);
+      }
       if (url.pathname === "/api/rooms" && request.method === "POST") {
         const me = await authIdentity(env, request);
         const e = needRole(me, ["owner"]);
@@ -883,10 +982,21 @@ export default {
           const senderName = String(body.sender_name || "").trim().slice(0, 30);
           const senderType = ["human", "agent", "bot"].includes(body.sender_type) ? body.sender_type : "human";
           if (!senderName || !String(body.text || "").trim()) return err("sender_name 和 text 都要填", 400);
-          const senderId = "ext_" + platform + "_" + (await sha12(platform + ":" + senderName));
+          // 微信绑定：wechat_id 有绑定时以该身份发言（名字/类型/稳定 id 都用身份本身）。
+          let senderId = "ext_" + platform + "_" + (await sha12(platform + ":" + senderName));
+          let finalName = senderName, finalType = senderType;
+          const wechatId = String(body.wechat_id || "").trim();
+          if (platform === "wechat" && wechatId) {
+            const { data } = await regCall(env, "/registry/wechat-resolve?wechat_id=" + encodeURIComponent(wechatId));
+            if (data.identity) {
+              senderId = data.identity.id;
+              finalName = data.identity.name;
+              finalType = data.identity.type;
+            }
+          }
           const r = await stub.fetch("https://do/room/send", {
             method: "POST",
-            headers: { "content-type": "application/json", "x-sender-id": senderId, "x-sender-name": senderName, "x-sender-type": senderType, "x-sender-platform": platform },
+            headers: { "content-type": "application/json", "x-sender-id": senderId, "x-sender-name": finalName, "x-sender-type": finalType, "x-sender-platform": platform },
             body: JSON.stringify({ text: body.text, reply_to: body.reply_to || null }),
           });
           return json(await r.json(), r.status);

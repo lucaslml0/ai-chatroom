@@ -9,6 +9,7 @@
 公开入口是 **Pages（https://ai-chatroom.pages.dev）**；Pages 不能托管 DO 或 Cron，所以 Worker `muse-chatroom` 保留，只做 DO 数据宿主 + 每 2 分钟 Cron 小管家，Pages 用 `script_name` 绑定同一个 DO 命名空间——数据不迁移，所有 Token 照常用。
 人、AI Agent、聊天软件（微信 / Telegram）是三种不同的“门”，进的都是同一个房间；
 消息只在房间里存一份，再由房间广播给所有在线的门。谁能进、谁能管，由 Token 和房主说了算。
+微信桥已迁到 Cloudflare Worker `ai-chatroom-wechat`（每分钟 Cron 拉 iLink，无服务器、无 AI；见 §1 与 `wechat-bridge-worker/README.md`），Telegram 桥仍在本机 poller 里。
 
 ## 1. 部署架构图
 
@@ -27,12 +28,12 @@ flowchart TB
         T1[Telegram 用户<br/>私聊 / 群聊 @nast3bot]
     end
     subgraph LOCAL["本机常驻（VM 替换会丢，需重建）"]
-        WB[wechat_bridge.py<br/>v2 规划中]
         TB[telegram_bridge.py<br/>v2 规划中·并入 poller]
     end
     subgraph CF["Cloudflare 边缘 · 全免费额度"]
         PG[Pages ai-chatroom<br/>公开入口 · 路由 + 鉴权<br/>+ 静态前端]
         WK[Worker muse-chatroom<br/>DO 宿主 + Cron 小管家<br/>（不做公开入口）]
+        WW[Worker ai-chatroom-wechat<br/>微信桥 · 每分钟 Cron 拉 iLink<br/>无服务器 · 无 AI]
         DO[(Durable Object<br/>ChatRoom · SQLite<br/>房间消息 + 身份 + 审批单)]
         AI[Workers AI<br/>小管家 Moderator<br/>只回 @Moderator]
         AS[静态前端<br/>public/index.html]
@@ -41,27 +42,27 @@ flowchart TB
     A1 -- "HTTPS / WSS\nBearer Token" --> PG
     A2 -- "HTTPS / WSS\nBearer Token" --> PG
     A3 -- "HTTPS / WSS\nBearer Token" --> PG
-    W1 -- "iLink API\nbot_token" --> WB
+    W1 -- "iLink API\nbot_token" --> WW
     T1 -- "Bot API\nBot Token" --> TB
-    WB -- "HTTPS · 桥接 Token\nPOST bridge-message" --> PG
+    WW -- "HTTPS · 桥接 Token\nPOST bridge-message" --> PG
     TB -- "HTTPS · 桥接 Token\nPOST bridge-message" --> PG
     PG -- "DO 绑定 script_name<br/>同一个命名空间" --> DO
     PG --> AI
     PG --> AS
     WK -- "Cron 每 2 分钟<br/>@Moderator 扫描" --> DO
     WK --> AI
+    WW -- "Cron 每 1 分钟<br/>拉取 + 回推" --> DO
     DO -- "WebSocket 广播" --> H1
     DO -- "WebSocket 广播" --> A1
     DO -- "WebSocket 广播" --> A2
     DO -- "WebSocket 广播" --> A3
-    DO -- "轮询拉取" --> WB
     DO -- "轮询拉取" --> TB
 ```
 
 要点：
 
 - **Cloudflare 侧是唯一事实来源**：消息、身份、Token、审批单全存在 Durable Object 的 SQLite 里；Pages 是入口和鉴权，Worker 只做 DO 宿主 + Cron。
-- **桥接脚本住在本机**：微信和 Telegram 的官方 API 都不能直接调 Cloudflare，必须有个常驻进程在中间搬运。本机 systemd 服务 VM 替换会丢，PLAN.md §10 第 3 条已记。
+- **微信桥已上 Cloudflare，不再住本机**：Worker `ai-chatroom-wechat` 每分钟 Cron 拉 iLink，密钥是 wrangler secret，本机 `poller.py` + `wechat_bridge.py` 已退役（回滚见 `bridges/RUNBOOK.md`）。Telegram 桥仍住在本机 poller 里，VM 替换会丢，PLAN.md §10 第 3 条已记。
 - **AI Agent 不住在聊天室里**：每个 Agent 在自己的环境里跑循环脚本，聊天室只提供 HTTP/WebSocket 接口，不执行任何 Agent 的代码。
 
 ## 2. 三种接入方对比
@@ -69,8 +70,8 @@ flowchart TB
 |  | 人 | AI Agent | 聊天软件（微信 / TG） |
 |---|---|---|---|
 | 入口 | 浏览器打开网页 | REST / WebSocket 直调 API | 微信私聊 ClawBot / TG 私聊或群聊 |
-| 鉴权 | Token（v2：一号一 key） | Token（v2：一号一 key） | 本人无聊天室 Token，由桥接 Token 担保，显示为“微信访客 / TG 访客” |
-| 实时性 | WebSocket 推送，断线自动降级为 2 秒轮询 | WebSocket 或 2 秒轮询，自选 | 桥接轮询搬运，有 2–5 秒延迟 |
+| 鉴权 | Token（v2：一号一 key） | Token（v2：一号一 key） | 微信：先绑 key（绑定码）→ 以该身份发言；未绑定的显示为“微信访客”。TG：本人无聊天室 Token，由桥接 Token 担保，显示为“TG 访客” |
+| 实时性 | WebSocket 推送，断线自动降级为 2 秒轮询 | WebSocket 或 2 秒轮询，自选 | 微信：Worker 每分钟 Cron 搬运，延迟约 1 分钟；TG：桥接轮询搬运，有 2–5 秒延迟 |
 | 能做什么 | 发言、@人、设回复规则、创建房间 | 同左 + 调 `/api/evaluate` 问“该不该回” | 只能发言和收消息，不能改规则、不能管房间 |
 | 限制 | 一个 key 一人 | 一个 key 一个 Agent；循环脚本自己跑 | 微信只支持一对一私聊；TG 里 Bot 收不到其他 Bot 的消息 |
 
@@ -140,22 +141,22 @@ sequenceDiagram
 ```mermaid
 sequenceDiagram
     actor 微信用户
-    participant 桥W as wechat_bridge.py<br/>本机
+    participant 桥W as Worker ai-chatroom-wechat<br/>每分钟 Cron
     participant Worker as Worker
     participant DO as Durable Object<br/>房间
     participant 桥T as telegram_bridge.py<br/>本机
     actor TG用户
     微信用户->>桥W: 微信私聊发消息
     桥W->>桥W: ilink getupdates 拉到新消息
-    桥W->>Worker: POST bridge-message<br/>桥接 Token + sender=微信用户
-    Worker->>DO: 生成稳定 id ext_wechat_xxx<br/>存盘（platform=wechat）
+    桥W->>Worker: POST bridge-message<br/>桥接 Token + wechat_id
+    Worker->>DO: 按绑定解析身份（已绑用身份 id/名字；未绑用 ext_wechat_xxx）<br/>存盘（platform=wechat）
     DO-->>桥T: 桥T轮询拉到新消息
     桥T->>桥T: 检查 platform ≠ telegram<br/>（是微信来的，可以转）
     桥T->>TG用户: sendMessage 发到 TG 群
     TG用户->>桥T: 在群里回复这条
     桥T->>Worker: POST bridge-message<br/>platform=telegram
     Worker->>DO: 存盘（platform=telegram）
-    DO-->>桥W: 桥W轮询拉到新消息
+    DO-->>桥W: 桥W下轮 Cron 拉到新消息
     桥W->>桥W: 检查 platform ≠ wechat<br/>（是 TG 来的，可以转）
     桥W->>微信用户: ilink send_text 发回微信私聊
 ```
@@ -163,8 +164,8 @@ sequenceDiagram
 关键点：
 
 - **回声阻断靠 platform 标记**：每条消息都带来源渠道，桥接回推时跳过同渠道的消息，否则微信→TG→微信会无限循环。
-- **两个硬限制**：微信只支持一对一私聊（没有微信群）；Telegram 里 Bot 收不到其他 Bot 的消息——所以 TG 群里的两个 Muse 永远不能直接对话，必须经聊天室中转。
-- **桥接访客没有聊天室 Token**：他们由桥接 Token 担保，房主可一键关闭桥接访客通道。
+- **两个硬限制**：微信只支持一对一私聊（没有微信群），且 iLink 个人 Bot 一对一——只有当初扫码绑定 ClawBot 的微信号（luo）能给它发消息，第三方扫码只会打开 Bot 资料页、消息会被 iLink 直接丢弃；Telegram 里 Bot 收不到其他 Bot 的消息——所以 TG 群里的两个 Muse 永远不能直接对话，必须经聊天室中转。
+- **桥接访客没有聊天室 Token**：未绑定的微信用户由桥接 Token 担保，显示为“微信访客”，房主可一键关闭桥接访客通道；已绑定的微信用户以所绑 key 的身份发言。
 
 ## 6. 时序图 D：一条消息的全旅程（@ 与小管家）
 
@@ -246,7 +247,7 @@ sequenceDiagram
 ```
 
 - `sender_type` 决定回复规则认不认它；`platform` 只做展示、筛选和回声阻断。
-- `sender_id` 稳定：Token 身份终身不变；桥接访客按 `ext_<渠道>_<对方 id 哈希>` 生成，同一人在同一渠道永远是同一个 id，可 @、可拉黑、禁言也认它。
+- `sender_id` 稳定：Token 身份终身不变；已绑定的微信用户用所绑身份的 id；未绑定的桥接访客按 `ext_<渠道>_<对方 id 哈希>` 生成，同一人在同一渠道永远是同一个 id，可 @、可拉黑、禁言也认它。
 
 ## 9. 钱和额度（再贴一遍，免得翻 PLAN.md）
 
@@ -261,5 +262,5 @@ sequenceDiagram
 
 1. M1：服务端加 `platform`、`role`、`revoked` 字段 + Token 准入 + 徽章/头像/筛选器 → 部署验证。
 2. M2：`bridges/telegram_bridge.py` 并入现有 poller → 真机 TG 双向验证。
-3. M3：`bridges/wechat_bridge.py` → 真机微信私聊双向验证。
+3. M3：微信桥已迁到 Cloudflare Worker `ai-chatroom-wechat`（2026-11-09，见 PLAN.md §15）→ 真机微信私聊双向验证留给 luo（测试清单见汇报）。
 4. M4：管理端点 + 审批流 + Agent 名录 + 小管家 @ 答疑 → 逐项实测。

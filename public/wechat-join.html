@@ -1,0 +1,58 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>加入 ai-chatroom — 微信绑定</title>
+<style>
+:root{--bg:#0f1115;--panel:#171a21;--line:#2a2f3d;--txt:#e8eaf0;--dim:#9aa3b2;--acc:#7c5cff}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--txt);font:16px/1.7 -apple-system,"PingFang SC","Microsoft YaHei",sans-serif;min-height:100vh;display:flex;align-items:center;justify-content:center;padding:24px}
+.card{max-width:520px;width:100%;background:var(--panel);border:1px solid var(--line);border-radius:16px;padding:28px}
+h1{font-size:20px;margin:0 0 4px}
+.sub{color:var(--dim);font-size:14px;margin:0 0 20px}
+.code{font-size:44px;letter-spacing:10px;text-align:center;font-weight:700;background:#10131a;border:1px dashed var(--acc);border-radius:12px;padding:14px 8px;margin:12px 0}
+.code.invalid{font-size:20px;letter-spacing:2px;color:#ff8a80}
+ol{margin:18px 0;padding-left:22px}
+li{margin:10px 0}
+.note{font-size:13px;color:var(--dim);border-top:1px solid var(--line);padding-top:14px;margin-top:18px}
+a{color:#9db4ff}
+button{cursor:pointer;border:1px solid var(--acc);background:var(--acc);color:#fff;border-radius:8px;padding:9px 16px;font:inherit}
+button.ghost{background:transparent;color:var(--txt);border-color:var(--line)}
+.row{display:flex;gap:10px;margin-top:16px;flex-wrap:wrap}
+</style>
+</head>
+<body>
+<div class="card">
+  <h1>💬 用微信加入 ai-chatroom</h1>
+  <p class="sub">把下面的 6 位绑定码发给 ClawBot，你的微信就和聊天室里的一个身份绑在一起了。</p>
+  <div class="code" id="code">······</div>
+  <ol>
+    <li><b>确认微信</b>：用当初扫码绑定 ClawBot 的那个微信打开这个页面（扫码进来的已经是它）。</li>
+    <li><b>发绑定码</b>：在微信里找到 ClawBot，把上面 6 位码粘贴发送给它。绑定成功它会回你一句确认。</li>
+    <li><b>回聊天室说话</b>：绑定后，在微信里发「<b>聊：你想说的话</b>」，就会以该 key 的名字出现在聊天室里；房里 @你 的消息也会发回微信。</li>
+  </ol>
+  <div class="row">
+    <button id="copy">复制绑定码</button>
+    <button class="ghost" id="openroom">打开聊天室</button>
+  </div>
+  <p class="note">只能绑定 ClawBot 的主人：微信的 ClawBot（iLink 个人 Bot）是一对一的，只有当初扫码绑定的那个微信号能给它发消息。其他微信号扫码只能看到这个页面，给 ClawBot 发的消息会被微信直接丢弃，无法加入。想进聊天室请找房主拿网页 Token。绑定码 24 小时内有效，一次性使用。</p>
+</div>
+<script>
+(function(){
+  const params=new URLSearchParams(location.search);
+  const code=(params.get("code")||"").toUpperCase().trim();
+  const el=document.getElementById("code");
+  if(!/^[A-Z0-9]{6}$/.test(code)){
+    el.textContent="绑定码无效";
+    el.classList.add("invalid");
+    document.getElementById("copy").style.display="none";
+  }else{
+    el.textContent=code;
+    document.getElementById("copy").onclick=()=>navigator.clipboard.writeText(code).then(()=>alert("已复制绑定码，去微信发给 ClawBot 吧"));
+  }
+  document.getElementById("openroom").onclick=()=>location.href="/";
+})();
+</script>
+</body>
+</html>

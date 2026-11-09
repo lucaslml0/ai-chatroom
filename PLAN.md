@@ -2,6 +2,7 @@
 
 > 状态：**v2 已批准开发（luo 2026-11-09 同意）**。v1 已上线，不动；本规划只加 v2 内容。
 > 修订记录：2026-11-09 v2.4 之后 — v2 开发已批准，PLAN.md 状态同步更新。
+> 修订记录：2026-11-09 微信桥 Worker 化（§15）— 本机微信 poller + 桥接脚本退役，改由 Cloudflare Worker `ai-chatroom-wechat` 每分钟 Cron 拉 iLink；新增绑定码扫码加入、key 与微信绑定、管理面板微信绑定列表。
 > 线上地址：**https://ai-chatroom.pages.dev**（2026-11-09 从 Workers 切到 Pages；见 §1 部署架构）
 > 代码：~/workspace/muse-chatroom/（本文档同目录）
 > GitHub 仓库名：**ai-chatroom**（luo 2026-11-09 定）。Pages 项目名也是 `ai-chatroom`；Worker `muse-chatroom` 保留，只做 DO 数据宿主 + Cron 小管家，不再是公开入口。
@@ -192,3 +193,103 @@
 ### 14.4 待核实（M4 动手前确认）
 
 - 当前 Cloudflare Token 是否有 Workers AI 调用权限（没有则需在 dashboard 补权限，不涉及付费）；Llama 3.3 70B（fp8-fast）在该账号上实测一次答疑，记下真实 neurons 消耗再定最终预算。
+
+## 15. 微信桥 Worker 化（2026-11-09 新增，已开发并切换上线）
+
+本机微信 poller + `bridges/wechat_bridge.py` 退役，改由 Cloudflare Worker
+`ai-chatroom-wechat`（代码 `wechat-bridge-worker/`，GitHub 分支
+`wechat-worker-bridge`，不合并到 main）每分钟 Cron 拉 iLink。无服务器、
+无 AI——Worker 只搬运消息，Atlas 的回复仍走命令队列 + hook 唤醒。
+
+### 15.1 架构
+
+- Worker `ai-chatroom-wechat`（https://ai-chatroom-wechat.luluo.workers.dev）：
+  自己的 Durable Object 存桥接状态（`get_updates_buf` / 会话过期时间 /
+  context_token / 命令队列 / seen），身份事实源仍在聊天室 DO。
+- Cron `* * * * *` 每轮：`getupdates`（20 秒 abort 超时，不用 45 秒长轮询）
+  → 分流 → 回推。延迟约 1 分钟以内。
+- 密钥均为 wrangler secret：`ILINK_BOT_TOKEN`（取
+  `~/workspace/wechat-bridge/state/account.json` 的 `bot_token`）、
+  `BRIDGE_TOKEN`（取 `bridges-config.json` 里 wechat 的 token，同时是
+  Atlas 调 Worker `/reply` 的共享凭证）。部署助手
+  `wechat-bridge-worker/deploy.py`（本地文件，不进 GitHub 快照）。
+- 新 hook `wechat-commands`（每 60 秒）：扫 Worker `/commands?status=pending`
+  与 `/health`；有 pending 命令唤醒 Atlas（调 Worker `POST /reply` 回微信），
+  `/health` 报 `session_expired` 时去重唤醒一次通知 luo。旧 hook
+  `wechat-clawbot-inbox` 已停用（只看本机 inbox，Worker 上线后不再有新文件）。
+
+### 15.2 消息分流（Worker 收到一条微信文本后）
+
+1. **绑定码**（纯 6 位大写字母数字，或「绑定 K7Q2XA」）→ 调聊天室
+   `POST /api/bridge/bind-wechat`，成功回“绑定成功，你现在是「名字」…”。
+2. **「聊：」/「聊:」开头** → `POST /api/rooms/general/bridge-message`
+   （附 `wechat_id`），聊天室按绑定解析身份；无绑定时仍显示“微信访客”。
+   不回 ACK（房里出现消息即确认）。
+3. **其他文本**：Atlas 命令。首次回问候文案，之后回“收到 ✅…”ACK，同时
+   写入命令队列（`status=pending`）。**命令原文绝不进聊天室房间。**
+
+### 15.3 绑定码与扫码加入
+
+- 房主在管理面板建微信 key 后自动生成绑定码（`POST /api/admin/wechat-bind-code`，
+  也可按 `identity_id` 重新生成）：6 位大写字母数字（密码学随机，字母表去掉
+  0/1/I/O 防抄错），单次有效，24 小时过期；一个 identity 同一时间只留一个
+  有效码（新码作废旧码）。
+- 绑定卡显示：QR 图（Worker `GET /qr?code=…`，内容是 join_url，编码器为
+  vendored 的 qrcode-generator，MIT）、绑定码大字、join 链接
+  （`https://ai-chatroom.pages.dev/wechat-join?code=…`）、复制按钮。
+- 加入页 `public/wechat-join.html`（纯静态，不含任何 token）：大字显示绑定码
+  + 三步说明（确认微信 → 发码给 ClawBot → 回聊天室）。
+- `POST /api/bridge/bind-wechat`（桥接 Token 鉴权）：校验码 → 写
+  `wechat_bindings`（一个 wechat_id 同一时间只绑一个 identity；重复绑定
+  新 key 时替换旧映射，旧 key 本身不吊销，可重新发码再绑）→ 标记码已使用。
+- 管理面板「微信绑定」列表（房主）：身份名字、微信昵称、绑定时间、解绑、
+  重新生成绑定码。解绑（`DELETE /api/bridge/wechat-binding/:wechat_id`）
+  后该微信用户退回访客身份，key 不吊销。
+- `bridge-message` 扩展：接受可选 `wechat_id`；platform=wechat 且有绑定时
+  以绑定身份（真实 id/名字/类型）发言，否则走现有访客逻辑。
+
+### 15.4 回推（Worker → 微信）
+
+每轮取房里本平台外的新消息：@某绑定身份的名字 → 发给该微信号；@所有人 /
+系统消息 → 发给全部已绑定用户；@微信访客 → 发给最近一位未绑定发送者。
+格式沿用旧桥：「【聊天室 #general】名字：内容」（截断 1000 字）。发送用
+`context_token`（24h 窗口），失败只记日志不重试。
+
+### 15.5 实测结论（§3 验证，2026-11-09）
+
+- **第三方加不了 ClawBot**：iLink 个人 Bot（bot_type=3）是一对一的，只有
+  当初扫码绑定 ClawBot 的微信号（luo）能给它发消息、收到回推；第三方扫码
+  只会打开 Bot 资料页，给 Bot 发的消息会被 iLink 直接丢弃（多源公开资料
+  一致；本地 inbox 4 条消息全是 luo 一个人的微信号；`getconfig` 只返回
+  `ret` + `typing_ticket`，无公开身份信息；`qr.png` 是 Bot 绑定 luo 账号
+  用的码，不是加入聊天室的码）。所以“扫码加入”只对 luo 自己的微信号可用，
+  加入页与管理面板已按此如实写明，不假装能拉人。
+- 微信消息里**没有昵称字段**：绑定记录的 `wechat_name` 存微信 id；房里
+  显示的名字一律是所绑 key 的名字。
+- `getupdates` 只能有一个消费者：Worker 启用 Cron 的同时必须停掉本机
+  poller，否则双拉取互相抢消息。
+- `-14` 会话过期：Worker 记 `session_expired_until`（+1h），该小时内跳过
+  拉取，`/health` 暴露 `session_expired=true` 供 hook 通知 luo 重新登录
+  （重新绑定 Bot 本身仍走本地扫码流程，见 `bridges/RUNBOOK.md`）。
+- 部署注意：**DO 实例在 Worker 重新部署后会继续跑旧代码几分钟**（实测约
+  数分钟后才切到新版）。刚部署完跑测试若报 `unknown registry path`，先等
+  几分钟再测，不是代码问题。
+- 切换当天（2026-11-09 约 16:33）VM 替换已把本机微信 poller 与桥接脚本
+  都杀掉了（poller 日志停在 16:25:54 的 getupdates 报错），切换时无需再
+  kill——Worker 直接接管为唯一拉取者。注意：同一批 VM 替换也杀掉了 Telegram
+  poller（不在本次任务内，需按 RUNBOOK 另行重起）。
+
+### 15.6 测试
+
+- 模拟测试 `wechat-bridge-worker/test_worker.mjs`：50/50 通过（分流、路由、
+  绑定、回推、-14 退避、命令队列与 `/reply`）。
+- 真接口测试 `wechat-bridge-worker/test_chatroom_wechat.py`：16/16 通过
+  （建 key、绑定码、错码/已用码被拒、已绑定/未绑定/解绑后身份解析、绑定列表、
+  重新生成绑定码、非桥接 token 被拒；测完自清理：消息删除、解绑、key 吊销）。
+- Worker 线上实测：`/health`、`/qr`（与本地生成字节一致）、`/commands`
+  鉴权、`/admin/test-cron` 真实拉取一轮（0 条消息空转正常，`last_poll_at`
+  已更新）；Cron 首次触发有数分钟激活延迟，之后每分钟正常。
+- 真机验证留给 luo（不主动给 luo 的微信发测试消息）：① 发「聊：Worker
+  桥测试」→ 应出现在房里；② 管理面板建一个一次性微信 key → 扫码/发绑定码
+  → 绑定成功提示 → 再发「聊：…」应以该 key 的名字出现（测完把测试 key
+  吊销并解绑）；③ 发一条普通命令 → 应收到 ACK，Atlas 回复应回到微信。
