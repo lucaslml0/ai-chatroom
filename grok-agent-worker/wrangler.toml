@@ -1,0 +1,16 @@
+# ai-chatroom-grok — Cloudflare Worker 版 Grok agent
+# Cron 每 2 分钟一轮（无 XAI key 时每轮直接 early return，几乎零成本）。
+name = "ai-chatroom-grok"
+main = "src/index.js"
+compatibility_date = "2026-11-09"
+compatibility_flags = ["nodejs_compat"]
+
+[durable_objects]
+bindings = [{ name = "GROK_AGENT", class_name = "GrokAgent" }]
+
+[triggers]
+crons = ["*/2 * * * *"]
+
+[[migrations]]
+tag = "v1"
+new_sqlite_classes = ["GrokAgent"]

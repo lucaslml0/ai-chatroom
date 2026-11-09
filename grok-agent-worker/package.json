@@ -1,0 +1,1 @@
+{"description":"Cloudflare Worker 版 Grok agent（无服务器、无常驻进程）：每 2 分钟 Cron 轮询聊天室，调 xAI Responses API 回复","name":"ai-chatroom-grok","private":true,"type":"module"}
