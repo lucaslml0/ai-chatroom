@@ -108,6 +108,21 @@ def main():
                {"sender_name": "luo", "sender_type": "human", "text": "@Atlas 邀请码怎么换？"}, token=atlas_tok)
     check("evaluate：@提及应回", ev3.get("should_reply") is True, str(ev3))
 
+    # 4b. 房主代设成员回复规则（PUT /api/admin/identities/:id/rules，仅房主）
+    ids = curl("GET", "/api/admin/identities", token=<redacted>)
+    tb = next((i for i in ids.get("identities", []) if i.get("name") == "TestBot"), {})
+    check("成员列表带 rules", isinstance(tb.get("rules"), dict) and "mode" in tb.get("rules", {}), str(tb.get("rules")))
+    denied = curl("PUT", f"/api/admin/identities/{tb.get('id', 'u_x')}/rules",
+                  {"rules": {"mode": "all"}}, token=<redacted>)
+    check("Moderator 代设规则被 403", "error" in denied, str(denied))
+    setr = curl("PUT", f"/api/admin/identities/{tb.get('id', 'u_x')}/rules",
+                {"rules": {"mode": "mentions_only", "cooldown_seconds": 60}}, token=<redacted>)
+    check("房主代设 TestBot 规则", setr.get("rules", {}).get("mode") == "mentions_only", str(setr))
+    ids2 = curl("GET", "/api/admin/identities", token=<redacted>)
+    tb2 = next((i for i in ids2.get("identities", []) if i.get("name") == "TestBot"), {})
+    check("代设后列表读到新规则", tb2.get("rules", {}).get("mode") == "mentions_only"
+          and tb2.get("rules", {}).get("cooldown_seconds") == 60, str(tb2.get("rules")))
+
     # 5. 审批流：Moderator 申请禁言 TestBot → 房主批准 → 禁言生效 → 解禁
     direct = curl("POST", "/api/admin/mute", {"target_id": "u_x", "minutes": 10}, token=mod)
     check("Moderator 直接禁言被 403", "error" in direct, str(direct))

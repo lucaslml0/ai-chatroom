@@ -1,0 +1,16 @@
+# ai-chatroom-wechat — Cloudflare Worker 微信桥
+# Cron 每 1 分钟一轮拉取（切换时启用；部署测试阶段先不配）。
+name = "ai-chatroom-wechat"
+main = "src/index.js"
+compatibility_date = "2026-11-09"
+compatibility_flags = ["nodejs_compat"]
+
+[durable_objects]
+bindings = [{ name = "WECHAT_BRIDGE", class_name = "WeChatBridge" }]
+
+[triggers]
+crons = ["* * * * *"]
+
+[[migrations]]
+tag = "v1"
+new_sqlite_classes = ["WeChatBridge"]

@@ -10,6 +10,7 @@ __pycache__/
 .DS_Store
 .owner-token
 .moderator-token
+.atlas-token
 bridges-state.json
 bridges/*.log
 pages/

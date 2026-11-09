@@ -144,6 +144,7 @@ pre{background:#10131a;border:1px solid var(--line);border-radius:8px;padding:10
           <label>用途（登记用）</label><input id="keypurpose" placeholder="如 给 Grok 进 general">
           <button id="createkey" style="width:100%;margin-top:8px">创建 key</button>
           <div id="tokenbox"></div>
+          <div id="wechatbind" style="display:none"></div>
           <p class="note">Moderator 建的 key 自动进房主私信箱，由房主分发；吊销 key 须房主批准（Moderator 发起审批）。</p>
         </div>
         <div id="inboxwrap" style="display:none">
@@ -154,6 +155,8 @@ pre{background:#10131a;border:1px solid var(--line);border-radius:8px;padding:10
         <div id="approvals"></div>
         <h4>👥 成员</h4>
         <div id="adminmembers"></div>
+        <h4>💬 微信绑定</h4>
+        <div id="wechatbindlist"></div>
         <button id="refreshadmin" style="width:100%;margin-top:8px">刷新管理面板</button>
       </div>
     </div>
@@ -416,6 +419,14 @@ async function loadAdmin(){
         await fetch(api+"/api/admin/distribute-key",{method:"POST",headers:authHeaders(),body:JSON.stringify({id:b.dataset.dist})});
         loadAdmin();
       });
+      const wb=await fetch(api+"/api/bridge/wechat-bindings",{headers:authHeaders()}).then(r=>r.json());
+      $("#wechatbindlist").innerHTML=(wb.bindings||[]).length?wb.bindings.map(b=>`<div class="rowline"><span><b>${esc(b.identity_name||"?")}</b> ← 微信 <code>${esc((b.wechat_name||b.wechat_id||"").slice(0,24))}</code><br><span class="note">绑定于 ${new Date(b.bound_at).toLocaleString("zh-CN")}</span></span><span><button data-rebind="${esc(b.identity_id||"")}">重新生成绑定码</button> <button data-unbind="${esc(b.wechat_id||"")}">解绑</button></span></div>`).join(""):"还没有微信绑定。";
+      document.querySelectorAll("#wechatbindlist [data-unbind]").forEach(b=>b.onclick=async()=>{
+        if(!confirm("解绑后该微信用户退回“微信访客”身份，key 本身不吊销。确定？"))return;
+        await fetch(api+"/api/bridge/wechat-binding/"+encodeURIComponent(b.dataset.unbind),{method:"DELETE",headers:authHeaders()});
+        loadAdmin();
+      });
+      document.querySelectorAll("#wechatbindlist [data-rebind]").forEach(b=>b.onclick=()=>showWechatBindCard(null,b.dataset.rebind));
     }
   }catch(e){/* 管理面板加载失败不影响聊天 */}
 }
@@ -441,8 +452,26 @@ $("#createkey").onclick=async()=>{
   const box=$("#tokenbox");box.style.display="block";
   box.innerHTML=`<b>新 key（只显示这一次，复制好）：</b><br>${esc(d.token)}<br><span class="note">${esc(d.note||"")}</span><br><button id="copytok" style="margin-top:8px">复制 key</button>`;
   $("#copytok").onclick=()=>navigator.clipboard.writeText(d.token).then(()=>alert("已复制"));
+  if($("#keyplatform").value==="wechat")showWechatBindCard(d.token,null);
   loadAdmin();
 };
+async function showWechatBindCard(token,identityId){
+  const box=$("#wechatbind");box.style.display="block";
+  box.innerHTML=`<span class="note">正在生成微信绑定码…</span>`;
+  const r=await fetch(api+"/api/admin/wechat-bind-code",{method:"POST",headers:authHeaders(),
+    body:JSON.stringify(token?{token}:{identity_id:identityId})});
+  const d=await r.json();
+  if(d.error){box.innerHTML=`<span class="note">绑定码生成失败：${esc(d.error)}</span>`;return;}
+  box.innerHTML=`<b>微信绑定码（24 小时内有效，一次性）：</b>
+    <div style="font-size:32px;letter-spacing:6px;text-align:center;margin:8px 0">${esc(d.code)}</div>
+    ${d.qr_url?`<img src="${esc(d.qr_url)}" alt="扫码加入" style="display:block;margin:0 auto;max-width:220px;background:#fff;border-radius:8px">`:""}
+    <div class="note" style="margin-top:8px">加入页：<a href="${esc(d.join_url)}" target="_blank">${esc(d.join_url)}</a></div>
+    <div class="note">用绑定了 ClawBot 的微信（房主 luo）扫码打开加入页，把 6 位码发给 ClawBot 即可绑定。其他人扫码只能看到这个页面，发给 ClawBot 的消息会被微信丢弃。</div>
+    <button id="copybind" style="margin-top:8px">复制绑定码</button>
+    <button id="copyjoin" style="margin-top:8px">复制加入链接</button>`;
+  $("#copybind").onclick=()=>navigator.clipboard.writeText(d.code).then(()=>alert("已复制绑定码"));
+  $("#copyjoin").onclick=()=>navigator.clipboard.writeText(d.join_url).then(()=>alert("已复制加入链接"));
+}
 $("#saverules").onclick=async()=>{
   readRulesUI();
   if(me&&me.token){
