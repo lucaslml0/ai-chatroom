@@ -653,6 +653,46 @@ export default {
         const result = await runPollCycle(env, null, report);
         return json({ result });
       }
+      // 迁移专用（2026-11-09 并进聊天室服务）：导出桥状态 + 各绑定微信号的
+      // context_token，供新服务 /api/bridge/seed-state 一次性写入。只认
+      // BRIDGE_TOKEN；返回含敏感 token，调用方必须存 0600 文件、绝不打印。
+      if (url.pathname === "/admin/export-state" && request.method === "GET") {
+        if (!needBridgeToken(request, env))
+          return err("需要 BRIDGE_TOKEN", 401);
+        const stub = env.WECHAT_BRIDGE.get(
+          env.WECHAT_BRIDGE.idFromName("wechat-bridge"),
+        );
+        const st = await stub
+          .fetch("https://do/", {
+            method: "POST",
+            headers: { "content-type": "application/json" },
+            body: JSON.stringify({ op: "get-state" }),
+          })
+          .then((x) => x.json())
+          .catch(() => ({}));
+        const bindings = await chatroomCall(
+          env,
+          "/api/bridge/wechat-bindings",
+        ).catch(() => ({ bindings: [] }));
+        const ids = new Set(
+          (bindings.bindings || []).map((b) => b.wechat_id),
+        );
+        if (st.last_from) ids.add(st.last_from);
+        const contexts = [];
+        for (const wid of ids) {
+          const c = await stub
+            .fetch("https://do/", {
+              method: "POST",
+              headers: { "content-type": "application/json" },
+              body: JSON.stringify({ op: "get-context", wechat_id: wid }),
+            })
+            .then((x) => x.json())
+            .catch(() => ({}));
+          if (c.context_token)
+            contexts.push({ wechat_id: wid, context_token: c.context_token });
+        }
+        return json({ state: st, contexts });
+      }
       return err("unknown path", 404);
     } catch (e) {
       return err(

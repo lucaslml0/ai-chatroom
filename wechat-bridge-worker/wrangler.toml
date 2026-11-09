@@ -8,8 +8,10 @@ compatibility_flags = ["nodejs_compat"]
 [durable_objects]
 bindings = [{ name = "WECHAT_BRIDGE", class_name = "WeChatBridge" }]
 
-[triggers]
-crons = ["* * * * *"]
+# Cron 已摘掉（2026-11-09 并进聊天室服务）：拉取定时器改挂 muse-chatroom
+# Worker 的第二条 Cron（* * * * *），这里不再配，免得新旧两边同时拉 iLink。
+# 删掉 [triggers] 后重部署，旧触发器即消失、空出一个免费名额。
+# Worker 本体先留着（导出迁移状态用），等新桥端到端验证通过后再 wrangler delete。
 
 [[migrations]]
 tag = "v1"

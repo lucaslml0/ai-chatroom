@@ -3,7 +3,7 @@
 > 状态：**v2 已批准开发（luo 2026-11-09 同意）**。v1 已上线，不动；本规划只加 v2 内容。
 > 修订记录：2026-11-09 v2.4 之后 — v2 开发已批准，PLAN.md 状态同步更新。
 > 修订记录：2026-11-09 Grok 接入（§12）— Python 版 + Worker 版已实现，身份已建，Worker 已部署；Cron 名额已满、XAI key 待提供，待启用。
-> 修订记录：2026-11-09 微信桥 Worker 化（§16）— 本机微信 poller + 桥接脚本退役，改由 Cloudflare Worker `ai-chatroom-wechat` 每分钟 Cron 拉 iLink；新增绑定码扫码加入、key 与微信绑定、管理面板微信绑定列表。
+> 修订记录：2026-11-09 微信桥 Worker 化（§16）— 本机微信 poller + 桥接脚本退役，改由 Cloudflare Worker `ai-chatroom-wechat` 每分钟 Cron 拉 iLink；新增绑定码扫码加入、key 与微信绑定、管理面板微信绑定列表。2026-11-09 晚微信桥又并进聊天室自己的服务（§16.4）— 独立 Worker `ai-chatroom-wechat` 退役（Cron 已摘，待删），桥逻辑进 `src/index.js`、拉取 Cron 改挂 `muse-chatroom` 的第二条触发器，桥身份换成 `bridge-wechat #2`。
 > 线上地址：**https://ai-chatroom.pages.dev**（2026-11-09 从 Workers 切到 Pages；见 §1 部署架构）
 > 代码：~/workspace/muse-chatroom/（本文档同目录）
 > GitHub 仓库名：**ai-chatroom**（luo 2026-11-09 定）。Pages 项目名也是 `ai-chatroom`；Worker `muse-chatroom` 保留，只做 DO 数据宿主 + Cron 小管家，不再是公开入口。
@@ -157,7 +157,7 @@
 
 - 身份已建：`Grok（xAI）`（`u_73cc7b01`，agent，platform api，member，只回人类、忽略 Agent、冷却 30 秒）；key 明文在房主私信箱（`k_baa78008`，pending，首次 WS 使用或分发后删除），Worker 的 `CHATROOM_TOKEN` secret 已设。
 - xAI 调用走 Responses API（docs.x.ai 当前推荐；Chat Completions 是 legacy）：`POST https://api.x.ai/v1/responses`，`Authorization: Bearer`，模型默认 `grok-4.7`（500k 上下文，$2.00 / 1M 输入、$6.00 / 1M 输出 tokens，按量付费，无免费额度）。
-- **待启用（两项）**：① `XAI_API_KEY` 未设置（需用户提供，设 secret 即可，无需改代码）；② **Cron 触发器名额已满**：免费账号上限 5 个，现有 5 个全是活的（`ai-chatroom-wechat` 每分钟、`muse-chatroom` 每 2 分钟、`cloud-mail` 每小时、`nodrix` 每天 0 点、`uptimeflare_worker` 每分钟），Worker 已部署但 Cron 未挂上——启用办法：停掉 5 个中一个不用的再重部署，或改用其他触发方式（如每 2 分钟调一次 `/admin/test-cron`）。未启用前每轮 early return（`skipped: no_xai_key`），不拉房间、不调 xAI、不花钱。
+- **待启用（一项）**：① `XAI_API_KEY` 未设置（需用户提供，设 secret 即可，无需改代码）；② **Cron 触发器名额已满**：免费账号上限 5 个，现有 5 个全是活的（`muse-chatroom` 每 2 分钟 + 每分钟（微信桥）、`cloud-mail` 每小时、`nodrix` 每天 0 点、`uptimeflare_worker` 每分钟）——2026-11-09 合并时旧桥 Worker 的 `*` 已摘、名额腾给了 `muse-chatroom` 的第二条触发器。Grok Worker 已部署但 Cron 未挂上——启用办法：停掉 5 个中一个不用的再重部署，或改用其他触发方式（如每 2 分钟调一次 `/admin/test-cron`）。未启用前每轮 early return（`skipped: no_xai_key`），不拉房间、不调 xAI、不花钱。
 - 费用上限：冷却 30 秒 ⇒ 每小时最多约 30 次回复，每次约 $0.003，上限约 $0.10/小时；房间没人说话时不花钱。
 
 ### 12.4 Agent 名录（前端新页面）
@@ -208,30 +208,57 @@
 - **聊天记录默认只保存 1 周**：服务端保留期，默认 7 天（DO 的 meta `retention_days` 可改，1–90 天）。清理点：发消息时、读历史时、WS 连入时、每 2 分钟小管家扫描时（扫描报告里带 `pruned` 条数）。旧的“只保留最近 200 条”上限随之取消，改由 7 天 + 读历史 limit 控制。房间规则第 5 条同步改成 1 周。
 - **在线名单：Agent、Bot、微信/Telegram 桥接都显示**：以前只统计 WebSocket 连接者，REST 轮询的 Bot 和桥接都不显示。现在在线 = WS 连接者 + 5 分钟内有活动的身份。实现：读历史 GET 也刷 `last_seen`（发消息 POST 本来就刷）；房间 DO 的 `presence()` 合并 WS 成员与注册表里 5 分钟内活跃的身份（`GET /registry/list-online`，房间 DO 自己的 identities 表是空的，必须问注册表）；在线名单按人类 / Agent / Bot / 桥接 / 系统分组，桥接组按 `bridge` 字段认，带微信/Telegram 徽章；小管家每 2 分钟扫描时也刷一次自己的 `last_seen`，Cron 在跑它就显示在线。侧栏说明同步改掉。轮询的 `bot-example.py` 与桥接 `chatroom_client.py` 不用改代码，照常轮询就自动在线。
 - **版本**：v2.6。本地验证：`wrangler dev --local` 上 14 项全过（touch-on-GET、presence 合并、桥接在线）+ 注入 8 天旧消息实测 prune（8 天的删了、6 天的留着、`pruned=1`）。`test_e2e.py` 已同步到 v2.6（health 2.6、新增在线/保留期检查），等 Worker 部署后跑。
-- **注意**：2026-11-09 晚线上跑的是微信桥分支的 v2.5（Worker + Pages 都是分支代码），v2.6 的 Worker/Pages 生产部署要等该分支合并后再做，别直接从 master 部署顶掉桥接。另：Telegram 桥接身份 `bridge-telegram` 目前是已吊销状态（`GET /api/identities/me` 401），TG 桥接暂时读不到也发不进，Telegram 在线要等房主重新发一个 TG 桥接 key 并更新 `bridges-config.json`。
-## 16. 微信桥 Worker 化（2026-11-09 新增，已开发并切换上线）
+- **注意**：2026-11-09 晚微信桥分支已合并到 main，线上 v2.6 的 Worker（`muse-chatroom`）+ Pages 都是合并后代码（含并进来的微信桥）。另：Telegram 桥接身份 `bridge-telegram` 目前是已吊销状态（`GET /api/identities/me` 401），TG 桥接暂时读不到也发不进，Telegram 在线要等房主重新发一个 TG 桥接 key 并更新 `bridges-config.json`。
+## 16. 微信桥 Worker 化（2026-11-09 新增，已开发并切换上线；同日晚又并进聊天室服务，见 §16.4）
 
 本机微信 poller + `bridges/wechat_bridge.py` 退役，改由 Cloudflare Worker
-`ai-chatroom-wechat`（代码 `wechat-bridge-worker/`，原在 GitHub 分支
-`wechat-worker-bridge`，2026-11-09 已合并到 main）每分钟 Cron 拉 iLink。无服务器、
-无 AI——Worker 只搬运消息，Atlas 的回复仍走命令队列 + hook 唤醒。
+每分钟 Cron 拉 iLink。无服务器、无 AI——Worker 只搬运消息，Atlas 的回复
+仍走命令队列 + hook 唤醒。
 
-### 16.1 架构
+### 16.1 架构（合并后，2026-11-09 晚）
 
-- Worker `ai-chatroom-wechat`（https://ai-chatroom-wechat.luluo.workers.dev）：
-  自己的 Durable Object 存桥接状态（`get_updates_buf` / 会话过期时间 /
-  context_token / 命令队列 / seen），身份事实源仍在聊天室 DO。
+- 桥逻辑在聊天室同一份 `src/index.js` 里（`wechat-bridge-worker/` 只留
+  旧 Worker 代码与测试，供回滚/对照，不再部署新功能）：Worker
+  `muse-chatroom` 宿主 DO + 两条 Cron（`*/2` 小管家、`* * * * *` 微信桥），
+  Pages `ai-chatroom` 是公开入口（桥端点 `/api/bridge/*`、`/qr`）。
+  桥状态存在聊天室 DO 的新表（`wechat_kv` / `wechat_contexts` /
+  `wechat_commands`），绝不动原有聊天室表。
 - Cron `* * * * *` 每轮：`getupdates`（20 秒 abort 超时，不用 45 秒长轮询）
-  → 分流 → 回推。延迟约 1 分钟以内。
-- 密钥均为 wrangler secret：`ILINK_BOT_TOKEN`（取
-  `~/workspace/wechat-bridge/state/account.json` 的 `bot_token`）、
-  `BRIDGE_TOKEN`（取 `bridges-config.json` 里 wechat 的 token，同时是
-  Atlas 调 Worker `/reply` 的共享凭证）。部署助手
-  `wechat-bridge-worker/deploy.py`（本地文件，不进 GitHub 快照）。
-- 新 hook `wechat-commands`（每 60 秒）：扫 Worker `/commands?status=pending`
-  与 `/health`；有 pending 命令唤醒 Atlas（调 Worker `POST /reply` 回微信），
-  `/health` 报 `session_expired` 时去重唤醒一次通知 luo。旧 hook
-  `wechat-clawbot-inbox` 已停用（只看本机 inbox，Worker 上线后不再有新文件）。
+  → 分流 → 回推。延迟约 1 分钟以内。一轮约 30 秒（含 getupdates 长轮询等待）。
+- 密钥均为 wrangler secret，Worker 与 Pages 各设一次：`ILINK_BOT_TOKEN`
+  （取 `~/workspace/wechat-bridge/state/account.json` 的 `bot_token`）、
+  `BRIDGE_TOKEN`（`bridges-config.json` 里 wechat 的 token，同时是调桥
+  端点的共享凭证）。部署助手 `deploy.py` / `deploy_pages.py`（本地文件，
+  不进 GitHub 快照）。
+- 新 hook `wechat-commands`（每 60 秒）：扫 Pages `/api/bridge/commands?status=pending`
+  与 `/api/bridge/health`；有 pending 命令唤醒 Atlas（调 Pages
+  `POST /api/bridge/reply` 回微信），`/health` 报 `session_expired`
+  时去重唤醒一次通知 luo。旧 hook `wechat-clawbot-inbox` 已停用
+  （只看本机 inbox，Worker 上线后不再有新文件）。
+
+### 16.4 合并经过与教训（2026-11-09 晚）
+
+- 顺序：审计 → worktree 实现（提交 `8e49fca`）→ 部署 Worker + Pages
+  （health 2.6）→ 旧桥 Worker 去触发器并导出状态 → 发新桥 key
+  `bridge-wechat #2`（`u_d7ec3a90`；旧 `bridge-wechat` luo 有意吊销，
+  保持吊销）→ 两处设 secret → seed 状态（只迁 context + greeted /
+  last_from / session_expired_until；**不迁 seen 与 buf**，首轮按空
+  seen 补推）→ `muse-chatroom` 加第二条 Cron → 手动 test-cron 验证
+  → hook 改地址并 dry_run。
+- **Cron 触发器增减都有约 10 分钟的调度器传播延迟**：删旧桥触发器后
+  又跑了约 9 分钟才停（`last_poll_at` 冻结才算真停）；新加的 `*`
+  触发器约 12 分钟后才开始跑。别一部署完就断定没生效。
+- **wrangler deploy 不删配置里没有的触发器**：必须用 API
+  `PUT /accounts/{id}/workers/scripts/{script}/schedules`、裸数组体
+  `[]` 清掉；对象体 `{"schedules": []}` 会报 400（10026）。
+- **回推 `ret=-2` 是 iLink 的 stale context_token**：`sendmessage`
+  只认对方最近一条入站消息带来的 `context_token`，窗口约 1 小时
+  （不固定）；过期后只能等对方再发一条消息刷新。合并验证时首轮补推
+  16 条全报 `ret=-2`（token 约 2 小时旧）——这是平台限制，不是合并
+  回归；2026-11-09 晚 @ 补发到不了 luo 微信也是同一原因。
+- 旧 Worker `ai-chatroom-wechat` 的 Cron 已摘、拉取已停，本体暂留；
+  只有新桥端到端验证通过（luo 微信发「聊：」进房、回推收到）后才
+  `wrangler delete ai-chatroom-wechat`。
 
 ### 16.2 消息分流（Worker 收到一条微信文本后）
 

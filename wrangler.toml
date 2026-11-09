@@ -17,8 +17,10 @@ bindings = [{ name = "CHATROOM", class_name = "ChatRoom" }]
 binding = "AI"
 
 # 每 2 分钟扫一次 @Moderator 的未回复消息（小管家）
+# 每 1 分钟拉一次微信 iLink（微信桥 2026-11-09 并进本 Worker；旧独立 Worker
+# ai-chatroom-wechat 的 Cron 已摘，名额从它那空出来——免费账号共 5 个）。
 [triggers]
-crons = ["*/2 * * * *"]
+crons = ["*/2 * * * *", "* * * * *"]
 
 [[migrations]]
 tag = "v1"

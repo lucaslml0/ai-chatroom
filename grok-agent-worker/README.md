@@ -63,8 +63,7 @@ Workers 免费账号每个账号最多 5 个 Cron 触发器，当前 5 个全是
 
 | Worker | Cron | 用途 |
 |---|---|---|
-| `ai-chatroom-wechat` | 每分钟 | 微信桥拉 iLink |
-| `muse-chatroom` | 每 2 分钟 | 小管家 Moderator 扫描 |
+| `muse-chatroom` | 每 2 分钟 + 每分钟 | 小管家 Moderator 扫描 + 微信桥拉 iLink |
 | `cloud-mail` | 每小时 | 邮件服务 |
 | `nodrix` | 每天 0 点 | nodrix 定时任务 |
 | `uptimeflare_worker` | 每分钟 | UptimeFlare 监控 |

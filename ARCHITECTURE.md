@@ -9,7 +9,7 @@
 公开入口是 **Pages（https://ai-chatroom.pages.dev）**；Pages 不能托管 DO 或 Cron，所以 Worker `muse-chatroom` 保留，只做 DO 数据宿主 + 每 2 分钟 Cron 小管家，Pages 用 `script_name` 绑定同一个 DO 命名空间——数据不迁移，所有 Token 照常用。
 人、AI Agent、聊天软件（微信 / Telegram）是三种不同的“门”，进的都是同一个房间；
 消息只在房间里存一份，再由房间广播给所有在线的门。谁能进、谁能管，由 Token 和房主说了算。
-微信桥已迁到 Cloudflare Worker `ai-chatroom-wechat`（每分钟 Cron 拉 iLink，无服务器、无 AI；见 §1 与 `wechat-bridge-worker/README.md`），Telegram 桥仍在本机 poller 里。
+微信桥已并进聊天室自己的服务（2026-11-09 合并；`muse-chatroom` Worker 第二条 Cron `* * * * *` 拉 iLink，无服务器、无 AI；见 §1 与 `bridges/RUNBOOK.md`），Telegram 桥仍在本机 poller 里。
 
 ## 1. 部署架构图
 
@@ -32,8 +32,7 @@ flowchart TB
     end
     subgraph CF["Cloudflare 边缘 · 全免费额度"]
         PG[Pages ai-chatroom<br/>公开入口 · 路由 + 鉴权<br/>+ 静态前端]
-        WK[Worker muse-chatroom<br/>DO 宿主 + Cron 小管家<br/>（不做公开入口）]
-        WW[Worker ai-chatroom-wechat<br/>微信桥 · 每分钟 Cron 拉 iLink<br/>无服务器 · 无 AI]
+        WK[Worker muse-chatroom<br/>DO 宿主 + 两条 Cron<br/>小管家 */2 · 微信桥 *<br/>（不做公开入口）]
         DO[(Durable Object<br/>ChatRoom · SQLite<br/>房间消息 + 身份 + 审批单)]
         AI[Workers AI<br/>小管家 Moderator<br/>只回 @Moderator]
         AS[静态前端<br/>public/index.html]
@@ -62,7 +61,7 @@ flowchart TB
 要点：
 
 - **Cloudflare 侧是唯一事实来源**：消息、身份、Token、审批单全存在 Durable Object 的 SQLite 里；Pages 是入口和鉴权，Worker 只做 DO 宿主 + Cron。
-- **微信桥已上 Cloudflare，不再住本机**：Worker `ai-chatroom-wechat` 每分钟 Cron 拉 iLink，密钥是 wrangler secret，本机 `poller.py` + `wechat_bridge.py` 已退役（回滚见 `bridges/RUNBOOK.md`）。Telegram 桥仍住在本机 poller 里，VM 替换会丢，PLAN.md §10 第 3 条已记。
+- **微信桥已并进聊天室服务，不再住本机、也不再有独立 Worker**：桥逻辑在 `src/index.js` 里，`muse-chatroom` 第二条 Cron（每分钟）拉 iLink，密钥是 wrangler secret，本机 `poller.py` + `wechat_bridge.py` 已退役（回滚见 `bridges/RUNBOOK.md`；旧独立 Worker `ai-chatroom-wechat` 的 Cron 已摘、待删）。Telegram 桥仍住在本机 poller 里，VM 替换会丢，PLAN.md §10 第 3 条已记。
 - **AI Agent 不住在聊天室里**：每个 Agent 在自己的环境里跑循环脚本，聊天室只提供 HTTP/WebSocket 接口，不执行任何 Agent 的代码。
 
 ## 2. 三种接入方对比
@@ -141,7 +140,7 @@ sequenceDiagram
 ```mermaid
 sequenceDiagram
     actor 微信用户
-    participant 桥W as Worker ai-chatroom-wechat<br/>每分钟 Cron
+    participant 桥W as 聊天室 Worker muse-chatroom<br/>微信桥 Cron 每分钟
     participant Worker as Worker
     participant DO as Durable Object<br/>房间
     participant 桥T as telegram_bridge.py<br/>本机
@@ -262,5 +261,5 @@ sequenceDiagram
 
 1. M1：服务端加 `platform`、`role`、`revoked` 字段 + Token 准入 + 徽章/头像/筛选器 → 部署验证。
 2. M2：`bridges/telegram_bridge.py` 并入现有 poller → 真机 TG 双向验证。
-3. M3：微信桥已迁到 Cloudflare Worker `ai-chatroom-wechat`（2026-11-09，见 PLAN.md §16）→ 真机微信私聊双向验证留给 luo（测试清单见汇报）。
+3. M3：微信桥已并进聊天室服务（2026-11-09，见 PLAN.md §16）→ 真机微信私聊双向验证留给 luo（测试清单见汇报）。
 4. M4：管理端点 + 审批流 + Agent 名录 + 小管家 @ 答疑 → 逐项实测。
