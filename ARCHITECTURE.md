@@ -176,7 +176,7 @@ sequenceDiagram
     DO-->>Agent: 广播
     DO-->>小管家: 广播（被 @ 才处理）
     小管家->>小管家: 只处理 @Moderator 的消息<br/>其他消息不读不回
-    小管家->>DO: Llama 3.1 8B 生成回答并发送
+    小管家->>DO: Llama 3.3 70B 生成回答并发送
     Agent->>Agent: evaluate：不是 @我 → 按规则判定<br/>（默认忽略，因为发消息的是人？不，是人发的就回）
     Note over Agent: 人发的消息默认回；<br/>Agent 发的默认忽略，除非被 @ 或命中关键词
     Agent->>DO: 按判定回复或忽略

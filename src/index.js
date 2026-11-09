@@ -309,7 +309,7 @@ export class ChatRoom {
       const id = newId("ap_");
       const minutes = Math.max(1, Math.min(1440, parseInt(body.minutes || "10", 10) || 10));
       sql.exec(`INSERT INTO approvals(id,requester_id,requester_name,action,target_id,target_name,reason,evidence_msg_id,minutes,status,created,expires_at)
-        VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+        VALUES(?,?,?,?,?,?,?,?,?,?,?,?)`,
         id, req.id, req.name, body.action, String(body.target_id || ""), String(body.target_name || "").slice(0, 30),
         String(body.reason || "").slice(0, 200), String(body.evidence_msg_id || ""), minutes, "pending", Date.now(), Date.now() + 24 * 3600 * 1000);
       return json({ id, status: "pending", expires_at: Date.now() + 24 * 3600 * 1000 });
@@ -563,8 +563,8 @@ const MOD_ID = "u_moderator";
 const NEURON_BUDGET = 2000;
 const NEURON_PER_REPLY = 15;
 
-async function handleModeratorScan(env) {
-  if (!env.AI) return;
+async function handleModeratorScan(env, report) {
+  if (!env.AI) { report && report.push("no AI binding"); return; }
   try {
     const today = new Date().toISOString().slice(0, 10);
     const dateRow = await regCall(env, "/registry/meta?key=neurons_date");
@@ -576,7 +576,7 @@ async function handleModeratorScan(env) {
     } else {
       used = parseInt(usedRow.data.value || "0", 10) || 0;
     }
-    if (used >= NEURON_BUDGET) return;
+    if (used >= NEURON_BUDGET) { report && report.push("neurons budget reached: " + used); return; }
     const { data } = await regCall(env, "/registry/list-rooms");
     for (const room of (data.rooms || [])) {
       const r = await roomStub(env, room.slug).fetch("https://do/room/history?limit=50");
@@ -589,6 +589,7 @@ async function handleModeratorScan(env) {
         m.ts > wm && m.sender_id !== MOD_ID &&
         (m.mentions || []).some((x) => x === MOD_NAME || x === "小管家") &&
         !answered.has(m.id)).sort((a, b) => a.ts - b.ts).slice(0, 3);
+      report && report.push(`room ${room.slug}: ${msgs.length} msgs, wm=${wm}, targets=${targets.length}`);
       let maxTs = wm;
       for (const q of targets) {
         maxTs = Math.max(maxTs, q.ts);
@@ -609,14 +610,20 @@ async function handleModeratorScan(env) {
         } else if (keyMatch) {
           reply = `@${q.sender_name} 建 key 需要 Moderator 的 Token，我这边还没配好，已转给房主处理。`;
         } else {
-          const ai = await env.AI.run("@cf/meta/llama-3.1-8b-instruct", {
-            messages: [
-              { role: "system", content: "你是 ai-chatroom 聊天室的小管家 Moderator。用中文简短回答，只回答房间规则、加入方法（需要房主或 Moderator 发的 Token，一号一 key）、邀请码互换、回复规则设置这四类问题。不知道就说不知道并转给房主，不要编造。最多 150 字。" },
-              { role: "user", content: `最近的聊天记录：\n${context}\n\n${q.sender_name} 问：${q.text}\n请回答。` },
-            ],
-          });
-          reply = String((ai && ai.response) || "").trim().slice(0, 500) || `@${q.sender_name} 这个问题我答不上来，已转给房主。`;
-          if (!reply.startsWith("@")) reply = `@${q.sender_name} ` + reply;
+          try {
+            const ai = await env.AI.run("@cf/meta/llama-3.3-70b-instruct-fp8-fast", {
+              messages: [
+                { role: "system", content: "你是 ai-chatroom 聊天室的小管家 Moderator。用中文简短回答，只回答房间规则、加入方法（需要房主或 Moderator 发的 Token，一号一 key）、邀请码互换、回复规则设置这四类问题。不知道就说不知道并转给房主，不要编造。最多 150 字。" },
+                { role: "user", content: `最近的聊天记录：\n${context}\n\n${q.sender_name} 问：${q.text}\n请回答。` },
+              ],
+            });
+            reply = String((ai && ai.response) || "").trim().slice(0, 500) || `@${q.sender_name} 这个问题我答不上来，已转给房主。`;
+            if (!reply.startsWith("@")) reply = `@${q.sender_name} ` + reply;
+          } catch (e) {
+            report && report.push(`AI error: ${e && e.message ? e.message : String(e)}`);
+            // 模型出错也不跳过：按规划回一句转房主，并照常发出去
+            reply = `@${q.sender_name} 这个问题我答不上来，已转给房主。`;
+          }
         }
         await roomStub(env, room.slug).fetch("https://do/room/send", {
           method: "POST",
@@ -625,10 +632,13 @@ async function handleModeratorScan(env) {
         });
         used += NEURON_PER_REPLY;
         await regCall(env, "/registry/meta", { key: "neurons_used", value: String(used) });
+        report && report.push(`replied to ${q.id} in ${room.slug}`);
       }
       if (maxTs > wm) await regCall(env, "/registry/meta", { key: "mod_wm_" + room.slug, value: String(maxTs) });
     }
-  } catch { /* 小管家出错就休息，不影响聊天 */ }
+  } catch (e) {
+    report && report.push(`scan error: ${e && e.message ? e.message : String(e)}`);
+  }
 }
 
 export default {
@@ -779,6 +789,23 @@ export default {
         if (e) return e;
         const { data } = await regCall(env, "/registry/stats");
         return json(data);
+      }
+      // 手动触发小管家扫描（房主调试用；Cron 每 2 分钟自动跑）
+      if (url.pathname === "/api/admin/moderator-scan" && request.method === "POST") {
+        const me = await authIdentity(env, request);
+        const e = needRole(me, ["owner"]);
+        if (e) return e;
+        const body = await bodyJson();
+        // 调试用：reset_watermark=true 时把扫描水位清零，重新处理历史 @
+        if (body.reset_watermark) {
+          const { data } = await regCall(env, "/registry/list-rooms");
+          for (const room of (data.rooms || [])) {
+            await regCall(env, "/registry/meta", { key: "mod_wm_" + room.slug, value: "0" });
+          }
+        }
+        const report = [];
+        await handleModeratorScan(env, report);
+        return json({ report });
       }
       if (url.pathname === "/api/rooms" && request.method === "POST") {
         const me = await authIdentity(env, request);
