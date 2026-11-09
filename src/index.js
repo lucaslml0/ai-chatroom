@@ -67,7 +67,9 @@ export function evaluateRules(rules, msg, self) {
     const ok = r.allow_senders.some((x) => x === sender || x === senderId);
     if (!ok) return { should_reply: false, reason: "不在白名单里" };
   }
-  const mentioned = self && (mentions.includes(self.name) || mentions.includes("all") || mentions.includes("所有人"));
+  // @ 提及按短名匹配：名字带（…）后缀时，用户只会 @ 短名（如 @Atlas 而不是 @Atlas（muse））。
+  const shortName = (self.name || "").split("（")[0].split("(")[0].trim();
+  const mentioned = self && (mentions.includes(self.name) || (shortName && mentions.includes(shortName)) || mentions.includes("all") || mentions.includes("所有人"));
   const hitKeyword = (r.keywords || []).some((k) => k && text.includes(k));
   if (r.mode === "none") return { should_reply: false, reason: "模式是不自动回复" };
   if (mentioned) return { should_reply: true, reason: "被 @提及" };

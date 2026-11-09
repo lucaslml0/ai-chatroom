@@ -11,6 +11,7 @@ __pycache__/
 .owner-token
 .moderator-token
 .atlas-token
+.*-token
 bridges-state.json
 bridges/*.log
 pages/

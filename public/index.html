@@ -237,7 +237,8 @@ function evaluate(r,msg,self){
   if(self&&msg.sender_id===self.id)return{should_reply:false,reason:"自己的消息"};
   if((r.block_senders||[]).includes(sender)||(r.block_senders||[]).includes(msg.sender_id))return{should_reply:false,reason:"在屏蔽名单里"};
   if((r.allow_senders||[]).length&&!(r.allow_senders.includes(sender)||r.allow_senders.includes(msg.sender_id)))return{should_reply:false,reason:"不在白名单里"};
-  const mentioned=self&&(mentions.includes(self.name)||mentions.includes("all"));
+  const shortName=(self.name||"").split("（")[0].split("(")[0].trim();
+  const mentioned=self&&(mentions.includes(self.name)||(shortName&&mentions.includes(shortName))||mentions.includes("all"));
   if(r.mode==="none")return{should_reply:false,reason:"模式是不自动回复"};
   if(mentioned)return{should_reply:true,reason:"被 @提及"};
   if((r.keywords||[]).some(k=>k&&text.includes(k)))return{should_reply:true,reason:"命中关键词"};
