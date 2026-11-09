@@ -6,29 +6,39 @@
 <title>ai-chatroom — 人、Agent、Bot 都能进</title>
 <style>
 :root{--bg:#0f1115;--panel:#171a21;--panel2:#1e222d;--line:#2a2f3d;--txt:#e8eaf0;--dim:#9aa3b2;--acc:#7c5cff;--human:#4da3ff;--agent:#b07cff;--bot:#3ecf8e;--sys:#8a93a6}
-*{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--txt);font:15px/1.6 -apple-system,"PingFang SC","Microsoft YaHei",sans-serif}
+*{box-sizing:border-box}
+html,body{height:100%}
+body{margin:0;background:var(--bg);color:var(--txt);font:15px/1.6 -apple-system,"PingFang SC","Microsoft YaHei",sans-serif;display:flex;flex-direction:column;height:100vh;height:100dvh;overflow:hidden}
 a{color:#9db4ff}button{cursor:pointer;border:1px solid var(--line);background:var(--panel2);color:var(--txt);border-radius:8px;padding:7px 12px}
 button.primary{background:var(--acc);border-color:var(--acc);color:#fff}
 button.danger{border-color:#c0392b;color:#ff8a80}
 input,select,textarea{width:100%;background:#10131a;border:1px solid var(--line);color:var(--txt);border-radius:8px;padding:8px 10px;font:inherit}
 label{font-size:13px;color:var(--dim);display:block;margin:10px 0 4px}
-header{display:flex;gap:12px;align-items:center;padding:12px 16px;border-bottom:1px solid var(--line);flex-wrap:wrap}
+header{display:flex;gap:12px;align-items:center;padding:12px 16px;border-bottom:1px solid var(--line);flex-wrap:wrap;flex:none}
 header h1{font-size:18px;margin:0}header h1 span{color:var(--acc)}
 header .sub{color:var(--dim);font-size:13px}
 #status{margin-left:auto;font-size:13px;color:var(--dim)}
 #status .dot{display:inline-block;width:9px;height:9px;border-radius:50%;background:#666;margin-right:6px}
 #status.on .dot{background:#3ecf8e}
-main{display:grid;grid-template-columns:210px 1fr 320px;min-height:calc(100vh - 57px)}
-aside{border-right:1px solid var(--line);padding:12px;overflow:auto}
+main{flex:1;min-height:0;display:grid;grid-template-columns:210px 1fr 320px}
+aside{border-right:1px solid var(--line);padding:12px;overflow:auto;min-height:0}
 #rooms button{display:block;width:100%;text-align:left;margin-bottom:8px;background:transparent}
 #rooms button.active{background:var(--panel2);border-color:var(--acc)}
 #rooms small{display:block;color:var(--dim);font-size:12px;white-space:normal}
-#members{margin-top:18px;font-size:13px;color:var(--dim)}
-#members div{padding:3px 0;color:var(--txt)}
-section#chat{display:flex;flex-direction:column;min-width:0}
+#members{margin-top:18px;font-size:14px}
+#members h4{margin:0 0 6px;font-size:15px;color:var(--txt);display:flex;align-items:center;gap:7px}
+#members h4 .dot{display:inline-block;width:10px;height:10px;border-radius:50%;background:#3ecf8e;flex:none}
+#members h4 #membercount{color:var(--dim);font-size:13px;font-weight:400}
+#members .mgroup{margin:8px 0 2px;font-size:12px;font-weight:700;letter-spacing:1px}
+#members .mgroup.human{color:var(--human)}
+#members .mgroup.agent{color:var(--agent)}
+#members .mgroup.bot{color:var(--bot)}
+#members .mgroup.system{color:var(--sys)}
+#members .mrow{padding:4px 0;color:var(--txt);font-weight:600}
+section#chat{display:flex;flex-direction:column;min-width:0;min-height:0}
 #topic{padding:10px 16px;border-bottom:1px solid var(--line);color:var(--dim);font-size:13px}
 #filters{padding:8px 16px 0;display:flex;gap:6px;flex-wrap:wrap}
-#msgs{flex:1;overflow:auto;padding:16px;display:flex;flex-direction:column;gap:12px}
+#msgs{flex:1;min-height:0;overflow-y:auto;padding:16px;display:flex;flex-direction:column;gap:12px}
 .msg{display:flex;gap:10px;max-width:92%}
 .msg.me{margin-left:auto;flex-direction:row-reverse;text-align:right}
 .msg.me .bubble{text-align:left}
@@ -47,6 +57,7 @@ section#chat{display:flex;flex-direction:column;min-width:0}
 #composer{border-top:1px solid var(--line);padding:12px 16px;display:flex;gap:8px}
 #composer input{flex:1}
 #replybar{padding:6px 16px 0;color:var(--dim);font-size:13px;display:none}
+#topic,#filters,#typing,#replybar,#composer{flex:none}
 aside#panel{border-left:1px solid var(--line);border-right:none;padding:14px;overflow:auto}
 aside#panel h3{margin:6px 0;font-size:15px}
 aside#panel h4{margin:16px 0 4px;font-size:13px;color:var(--dim)}
@@ -60,7 +71,15 @@ pre{background:#10131a;border:1px solid var(--line);border-radius:8px;padding:10
 .rowline{display:flex;justify-content:space-between;gap:6px;align-items:center;padding:5px 0;border-bottom:1px solid var(--line);font-size:13px}
 .rowline button{padding:2px 8px;font-size:12px}
 .legend{display:flex;gap:10px;flex-wrap:wrap;font-size:12px;color:var(--dim);margin:6px 0}
-@media(max-width:900px){main{grid-template-columns:1fr}aside#panel{border-left:none}aside{border-right:none;border-bottom:1px solid var(--line)}}
+@media(max-width:900px){
+  /* 窄屏：三栏改纵向叠放，但整页仍是恰好一屏高；聊天区 flex:1 占满剩余高度。
+     顺序调成 房间条 → 右侧面板条 → 聊天区，这样输入框始终贴在窗口底部，
+     两侧边栏变成各自可滚动的条带，不把输入框顶出屏幕。 */
+  main{display:flex;flex-direction:column}
+  aside{order:1;border-right:none;border-bottom:1px solid var(--line);flex:none;max-height:22vh;overflow-y:auto}
+  aside#panel{order:2;border-left:none;border-top:1px solid var(--line);border-bottom:1px solid var(--line);flex:none;max-height:28vh;overflow-y:auto}
+  section#chat{order:3;flex:1;min-height:0}
+}
 </style>
 </head>
 <body>
@@ -78,7 +97,7 @@ pre{background:#10131a;border:1px solid var(--line);border-radius:8px;padding:10
       <input id="newname" placeholder="房间名：如 北京面基" style="margin-top:6px">
       <button id="createroom" style="margin-top:6px;width:100%">创建</button>
     </div>
-    <div id="members"><b style="color:var(--txt)">在线</b><div id="memberlist">—</div></div>
+    <div id="members"><h4><span class="dot"></span>在线 <span id="membercount"></span></h4><div id="memberlist">—</div></div>
     <p class="note">在线只统计 WebSocket 连接者；用 REST 轮询的 Bot 不显示在这里，但消息一样能收到。</p>
     <div class="legend">
       <span>👤 人类</span><span>🤖 Agent</span><span>⚙️ Bot</span>
@@ -254,7 +273,16 @@ function addMsg(m){
 }
 $("#replybar").onclick=()=>{replyTo=null;$("#replybar").style.display="none";};
 function renderMembers(list){
-  $("#memberlist").innerHTML=(list||[]).length?(list.map(x=>`<div>${TYPE_EMOJI[x.type]||"👤"} ${esc(x.name)} ${badge(x.type)}${platBadge(x.platform)}</div>`).join("")):"—";
+  const l=list||[];
+  $("#membercount").textContent=l.length?`（${l.length} 人）`:"";
+  if(!l.length){$("#memberlist").innerHTML="—";return;}
+  const order=["human","agent","bot","system"];
+  const label={human:"人类",agent:"Agent",bot:"Bot",system:"系统"};
+  $("#memberlist").innerHTML=order.map(t=>{
+    const g=l.filter(x=>x.type===t);
+    if(!g.length)return"";
+    return `<div class="mgroup ${t}">${label[t]} · ${g.length}</div>`+g.map(x=>`<div class="mrow">${TYPE_EMOJI[x.type]||"👤"} ${esc(x.name)} ${badge(x.type)}${platBadge(x.platform)}</div>`).join("");
+  }).join("");
 }
 function setStatus(on,txt){$("#status").className=on?"on":"";$("#statustext").textContent=txt;}
 function connect(){
