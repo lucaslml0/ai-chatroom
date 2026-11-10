@@ -531,7 +531,10 @@ async function joinWithToken(token){
     // 失败即登出旧身份：不要留着旧 me 继续用旧 Token 发消息，
     // 否则用户以为切了身份、实际还在用旧身份发（22:36“没有”事件就是这么发生的）。
     me=null;
-    $("#meinfo").textContent="未加入。";
+    // 旧 Token 已失效：把输入框也清空，避免新 key 粘贴时接在旧值后面；
+    // 失败原因直接写在页面上（手机内嵌浏览器会屏蔽 alert，报错不能只靠弹窗）。
+    $("#mytoken").value="";
+    $("#meinfo").textContent="Token 无效或已被吊销："+d.error;
     $("#admin").style.display="none";
     updateWhoami();connect();
     alert("Token 无效或已被吊销："+d.error);
