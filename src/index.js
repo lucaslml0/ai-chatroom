@@ -1530,7 +1530,7 @@ export default {
         const { status, data } = await containerFetch(env, "/bridges", { method: "POST", body: JSON.stringify(body) });
         return json(data, status);
       }
-      const cbMatch = url.pathname.match(/^\/api\/admin\/container-bridges\/([^/]+)(?:\/(login-start|login-status|restart))?$/);
+      const cbMatch = url.pathname.match(/^\/api\/admin\/container-bridges\/([^/]+)(?:\/(login-start|login-status|login-verify|restart))?$/);
       if (cbMatch) {
         const me = await authIdentity(env, request);
         const e = needRole(me, ["owner"]);
@@ -1558,6 +1558,11 @@ export default {
         }
         if (action === "login-status" && request.method === "GET") {
           const { status, data } = await containerFetch(env, `/bridges/${bid}/login-status`);
+          return json(data, status);
+        }
+        if (action === "login-verify" && request.method === "POST") {
+          const body = await bodyJson();
+          const { status, data } = await containerFetch(env, `/bridges/${bid}/login-verify`, { method: "POST", body: JSON.stringify(body) });
           return json(data, status);
         }
         return err("unknown api", 404);

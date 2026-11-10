@@ -595,33 +595,45 @@ async function loadBridges(){
   const bs=r.bridges||[];
   $("#bridgecount").textContent=`${bs.length}/10`;
   list.innerHTML=bs.length?bs.map(b=>{
-    const st=b.status||"";
-    const badge=st==="running"?"🟢 在跑":st==="awaiting-login"?"🟡 等扫码":st==="logged-in"?"🟢 已登录":st==="expired"?"🔴 会话过期":st==="error"?"🔴 异常":esc(st||"未知");
+    const st=b.status||"", bs2=b.bind_status||"";
+    const badge=st==="running"&&bs2==="bound"?"🟢 在跑":st==="running"?"🟡 在跑·未绑定":st==="unbound"?"🟡 等扫码":st==="stopped"?"⚪ 已停":st==="error"?"🔴 异常":esc(st||"未知");
     const last=b.last_poll_at?new Date(b.last_poll_at).toLocaleTimeString("zh-CN"):"—";
-    return `<div class="rowline"><span><b>${esc(b.name||b.id)}</b> ${badge}<br><span class="note">${esc(b.identity_name||"")} · 微信 ${esc((b.wechat_id||"未绑定").slice(0,24))} · 最近拉取 ${last}</span></span><span><button data-qr="${esc(b.id)}">扫码绑定</button> <button data-restart="${esc(b.id)}">重启</button> <button data-delbridge="${esc(b.id)}">删除</button></span></div>`;
+    const wx=b.ilink_user_id||b.wechat_id||(bs2==="bound"?"已绑定":"未绑定");
+    return `<div class="rowline"><span><b>${esc(b.name||b.id)}</b> ${badge}<br><span class="note">${esc(b.identity_name||b.identity_id||"")} · 微信 ${esc(String(wx).slice(0,24))} · 最近拉取 ${last}</span></span><span><button data-qr="${esc(b.id)}">扫码绑定</button> <button data-restart="${esc(b.id)}">重启</button> <button data-delbridge="${esc(b.id)}">删除</button></span></div>`;
   }).join(""):"还没有桥，点下面新建。";
   list.querySelectorAll("[data-qr]").forEach(x=>x.onclick=()=>showBridgeQr(x.dataset.qr));
   list.querySelectorAll("[data-restart]").forEach(x=>x.onclick=async()=>{await fetch(api+`/api/admin/container-bridges/${encodeURIComponent(x.dataset.restart)}/restart`,{method:"POST",headers:authHeaders()});loadBridges();});
   list.querySelectorAll("[data-delbridge]").forEach(x=>x.onclick=async()=>{if(!confirm("删除这座桥？它的微信会断开，key 本身不吊销。"))return;await fetch(api+`/api/admin/container-bridges/${encodeURIComponent(x.dataset.delbridge)}`,{method:"DELETE",headers:authHeaders()});loadBridges();});
 }
 let bridgeQrTimer=null;
-async function showBridgeQr(bridgeId){
+async function showBridgeQr(bridgeId,force){
   const box=$("#bridgeqr");box.style.display="block";
   box.innerHTML=`<span class="note">正在生成登录二维码…</span>`;
-  const r=await fetch(api+`/api/admin/container-bridges/${encodeURIComponent(bridgeId)}/login-start`,{method:"POST",headers:authHeaders()});
+  const r=await fetch(api+`/api/admin/container-bridges/${encodeURIComponent(bridgeId)}/login-start`,{method:"POST",headers:authHeaders(),body:JSON.stringify({force:!!force})});
   const d=await r.json();
-  if(d.error){box.innerHTML=`<span class="note">二维码生成失败：${esc(d.error)}</span>`;return;}
+  if(d.error){
+    if(/already bound/i.test(d.error)){
+      box.innerHTML=`<span class="note">这座桥已经绑定过了，无需重复扫码。会话过期时可以强制重新扫码。</span><br><button id="forcelogin" style="margin-top:8px">强制重新扫码</button>`;
+      $("#forcelogin").onclick=()=>showBridgeQr(bridgeId,true);
+    } else box.innerHTML=`<span class="note">二维码生成失败：${esc(d.error)}</span>`;
+    return;
+  }
   box.innerHTML=`<b>扫码绑定微信（登录二维码，过期自动刷新）：</b>
     <div style="max-width:240px;margin:8px auto;background:#fff;border-radius:8px;padding:8px">${d.qr_svg||""}</div>
     <div class="note">用要绑定的那个微信扫码确认。扫码即绑定，不用再发绑定码。二维码只发给要绑定的那个人，别公开贴到房里。</div>
-    <div class="note" id="bridgeqrstatus">等待扫码…</div>`;
+    <div class="note" id="bridgeqrstatus">等待扫码…</div>
+    <div id="bridgeverify" style="display:none;margin-top:8px"><input id="verifycode" placeholder="手机上的验证码" style="width:140px"><button id="sendverify">提交验证码</button></div>`;
+  $("#sendverify").onclick=async()=>{
+    const code=$("#verifycode").value.trim();if(!code){alert("先填验证码");return;}
+    await fetch(api+`/api/admin/container-bridges/${encodeURIComponent(bridgeId)}/login-verify`,{method:"POST",headers:authHeaders(),body:JSON.stringify({verify_code:code})});
+    $("#bridgeverify").style.display="none";$("#bridgeqrstatus").textContent="验证码已提交，继续等确认…";
+  };
   if(bridgeQrTimer)clearInterval(bridgeQrTimer);
   bridgeQrTimer=setInterval(async()=>{
     const s=await fetch(api+`/api/admin/container-bridges/${encodeURIComponent(bridgeId)}/login-status`,{headers:authHeaders()}).then(r=>r.json()).catch(()=>({}));
     const st=$("#bridgeqrstatus"); if(!st){clearInterval(bridgeQrTimer);return;}
-    if(s.status==="confirmed"){clearInterval(bridgeQrTimer);st.textContent=`已绑定：${s.wechat_id||""}，桥已开始拉取。`;loadBridges();}
-    else if(s.status==="scanned"){st.textContent="已扫码，手机上点确认…";}
-    else if(s.status==="need_verifycode"){st.textContent="微信要求输验证码：按手机上的提示输入后等一会儿。";}
+    if(s.status==="confirmed"||s.status==="already_bound"){clearInterval(bridgeQrTimer);st.textContent=`已绑定：${s.ilink_user_id||""}，桥已开始拉取。`;loadBridges();}
+    else if(s.status==="need_verifycode"){st.textContent="微信要求输验证码：把手机上显示的数字填下面，点提交。";$("#bridgeverify").style.display="block";}
     else if(s.status==="expired"){st.textContent="二维码过期了，正在刷新…";clearInterval(bridgeQrTimer);showBridgeQr(bridgeId);}
     else if(s.status==="error"){clearInterval(bridgeQrTimer);st.textContent="登录出错："+(s.error||"");}
   },3000);
