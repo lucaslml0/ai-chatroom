@@ -1,6 +1,6 @@
 // ai-chatroom 微信桥（已并进聊天室服务 src/index.js）模拟测试（不发真实微信消息、不调真实 iLink）。
 // 与 wechat-bridge-worker/test_worker.mjs 同用例，改 import 自 ./src/index.js；旧 Worker 删除后旧文件随之删除。
-// 覆盖：分流（绑定码/聊：/命令）、回推路由、-14 退避、命令队列与 /reply。
+// 覆盖：分流（绑定码/聊天）、回推路由、-14 退避、命令队列与 /reply。
 // 聊天室侧真接口测试见 test_chatroom_wechat.py（调线上 Pages API）。
 // Usage: node test_worker.mjs
 import {
@@ -12,12 +12,6 @@ import {
   runPollCycle,
   handleReply,
 } from "./src/index.js";
-// 问候/ACK 文案与 src/index.js 的 WECHAT_GREETING/WECHAT_ACK 保持一致
-//（Worker 入口模块不能 export 字符串常量——workerd 会把它当入口点而报错，
-// 所以这里直接写出期望文案；文案改了测试就该跟着改）。
-const GREETING =
-  "我是 Atlas，微信收发已经通了 ✅\n你在微信里给 ClawBot 发的消息我都能收到。直接在这里给我派活就行。";
-const ACK = "收到 ✅ 我记下了，会在 Muse 那边处理。";
 
 let passed = [];
 let failed = [];
@@ -155,10 +149,15 @@ check(
 check("分流：聊: 英文冒号", classifyInbound("聊:hello").text === "hello");
 check("分流：聊：后空内容算空", classifyInbound("聊：").kind === "empty");
 check(
-  "分流：普通文本是命令",
-  classifyInbound("帮我查一下天气").kind === "command",
+  "分流：无前缀直接进房",
+  classifyInbound("帮我查一下天气").kind === "chat" &&
+    classifyInbound("帮我查一下天气").text === "帮我查一下天气",
 );
-check("分流：7 位码不是绑定码", classifyInbound("K7Q2XAB").kind === "command");
+check(
+  "分流：@all 无前缀进房",
+  classifyInbound("@all 测试一下").kind === "chat",
+);
+check("分流：7 位码不是绑定码", classifyInbound("K7Q2XAB").kind === "chat");
 check("分流：空文本", classifyInbound("   ").kind === "empty");
 
 // ---------- 2. routePushTargets ----------
@@ -367,48 +366,40 @@ check("QR：不同码不同图", makeQrSvg("AAAAAA") !== makeQrSvg("BBBBBB"));
       .length === 0,
   );
 }
-// ---------- 6. runPollCycle：聊：转发（已绑定身份） ----------
+// ---------- 6. runPollCycle：无前缀转发（已绑定身份） ----------
 {
   const sys = new MockSys({
-    updates: { ret: 0, msgs: [msg(LUO, "聊：Worker 桥测试")] },
+    updates: { ret: 0, msgs: [msg(LUO, "Worker 桥测试")] },
     bindings: [{ identity_name: "luo", wechat_id: LUO }],
   });
   const r = await runPollCycle({}, sys);
-  check("聊：转发进房", r.forwarded === 1, JSON.stringify(r));
+  check("无前缀转发进房", r.forwarded === 1, JSON.stringify(r));
   const post = sys.chatroomPosts.find((p) =>
     p.path.endsWith("/bridge-message"),
   );
   check(
-    "聊：附 wechat_id",
+    "转发附 wechat_id",
     post && post.body.wechat_id === LUO && post.body.text === "Worker 桥测试",
   );
-  check("聊：不回 ACK", sys.sent.length === 0);
-  check("聊：已绑定者不进 last_from", sys.kv.last_from !== LUO);
+  check("转发不回微信", sys.sent.length === 0);
+  check("已绑定者不进 last_from", sys.kv.last_from !== LUO);
 }
-// ---------- 7. runPollCycle：命令 + 首条问候 / 再次 ACK ----------
+// ---------- 7. runPollCycle：普通文本不再进命令队列 ----------
 {
   const sys = new MockSys({
     updates: { ret: 0, msgs: [msg(LUO, "帮我查一下今天的热点")] },
   });
   const r1 = await runPollCycle({}, sys);
-  check("命令：进队列", r1.commands === 1);
+  check("无前缀：直接进房", r1.forwarded === 1, JSON.stringify(r1));
+  check("无前缀：不进命令队列", r1.commands === 0);
+  check("无前缀：不回问候/ACK", sys.sent.length === 0);
   check(
-    "命令：首条回问候文案",
-    sys.sent.length === 1 && sys.sent[0].text === GREETING,
-  );
-  const sys2 = new MockSys({
-    updates: { ret: 0, msgs: [msg(LUO, "再查一个")] },
-  });
-  sys2.kv.greeted = [LUO];
-  sys2.contexts = sys.contexts;
-  const r2 = await runPollCycle({}, sys2);
-  check(
-    "命令：再次回 ACK",
-    r2.commands === 1 && sys2.sent.length === 1 && sys2.sent[0].text === ACK,
-  );
-  check(
-    "命令：原文绝不进房",
-    !sys.chatroomPosts.some((p) => p.path.endsWith("/bridge-message")),
+    "无前缀：原文进房",
+    sys.chatroomPosts.some(
+      (p) =>
+        p.path.endsWith("/bridge-message") &&
+        p.body.text === "帮我查一下今天的热点",
+    ),
   );
 }
 // ---------- 8. runPollCycle：-14 会话过期 ----------
@@ -504,7 +495,7 @@ check("QR：不同码不同图", makeQrSvg("AAAAAA") !== makeQrSvg("BBBBBB"));
 {
   const guest = "guest@im.wechat";
   const sys = new MockSys({
-    updates: { ret: 0, msgs: [msg(guest, "聊：我是访客")] },
+    updates: { ret: 0, msgs: [msg(guest, "我是访客")] },
     roomMessages: [
       {
         id: "m9",

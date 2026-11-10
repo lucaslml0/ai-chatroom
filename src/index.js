@@ -23,9 +23,6 @@ const JOIN_PAGE = "https://ai-chatroom.pages.dev/wechat-join";
 const POLL_TIMEOUT_MS = 20000;
 const SESSION_BACKOFF_MS = 3600 * 1000;
 const WECHAT_ROOM = "general";
-const WECHAT_GREETING =
-  "我是 Atlas，微信收发已经通了 ✅\n你在微信里给 ClawBot 发的消息我都能收到。直接在这里给我派活就行。";
-const WECHAT_ACK = "收到 ✅ 我记下了，会在 Muse 那边处理。";
 
 export const DEFAULT_ROOMS = [
   { slug: "general", name: "综合大厅", topic: "随便聊，Muse 使用心得、邀请互换都从这里开始" },
@@ -874,7 +871,9 @@ export function extractText(msg) {
   return parts.join("\n");
 }
 
-// 入站分流：绑定码 / 聊： / 命令。
+// 入站分流（2026-11-10 去前缀）：绑定码 / 聊天。luo 决定去掉「聊：」
+// 前缀规则——微信发来的所有非绑定码消息都直接进房；「聊：」还在就剥掉
+//（兼容旧习惯），没有也不再要求。命令队列自此不再收新消息。
 const WECHAT_CHAT_PREFIXES = ["聊：", "聊:"];
 const WECHAT_BIND_CODE_RE = /^([A-Za-z0-9]{6})$/;
 const WECHAT_BIND_WORD_RE = /^绑定\s*([A-Za-z0-9]{6})$/;
@@ -891,7 +890,7 @@ export function classifyInbound(text) {
       return body ? { kind: "chat", text: body } : { kind: "empty" };
     }
   }
-  return { kind: "command", text: t };
+  return { kind: "chat", text: t };
 }
 
 // 回推路由：返回要发给哪些 wechat_id（纯函数）。
@@ -1074,14 +1073,12 @@ export async function runPollCycle(env, sys, report = []) {
   const boundByName = new Map(list.map((b) => [b.identity_name, b.wechat_id]));
   const boundIds = new Set(list.map((b) => b.wechat_id));
   const allBound = list.map((b) => b.wechat_id);
-  const greeted = new Set(state.greeted || []);
   let lastFrom = state.last_from || null;
   const counts = {
     received: 0,
     forwarded: 0,
     bound: 0,
-    commands: 0,
-    greeted: 0,
+    commands: 0, // 去前缀后不再收新命令；字段保留，恒为 0
   };
 
   for (const m of resp.msgs || []) {
@@ -1114,7 +1111,7 @@ export async function runPollCycle(env, sys, report = []) {
         counts.bound++;
         await sys.ilinkSendText(
           from,
-          `绑定成功，你现在是「${r.identity.name}」，发「聊：…」就能进聊天室说话了。`,
+          `绑定成功，你现在是「${r.identity.name}」，直接发消息就能进聊天室说话了。`,
           m.context_token,
         );
       } else {
@@ -1134,19 +1131,9 @@ export async function runPollCycle(env, sys, report = []) {
       });
       if (r.message) counts.forwarded++;
       else report.push("bridge-message failed: " + (r.error || "unknown"));
-    } else if (c.kind === "command") {
-      await sys.doCall("add-command", { wechat_id: from, text: c.text });
-      counts.commands++;
-      const isFirst = !greeted.has(from);
-      await sys.ilinkSendText(from, isFirst ? WECHAT_GREETING : WECHAT_ACK, m.context_token);
-      if (isFirst) {
-        greeted.add(from);
-        counts.greeted++;
-      }
     }
   }
   patch.last_from = lastFrom;
-  patch.greeted = [...greeted];
 
   // 回推：房里非 wechat 来源的新消息，按路由发回微信。
   const seen = state.seen || {};

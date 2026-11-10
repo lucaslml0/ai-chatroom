@@ -43,13 +43,13 @@ DO 里没有别的东西了。**删触发器的教训**：`wrangler deploy` 不�
 
 怎么用（微信）：
 
-- 给 ClawBot 发 `聊：xxx` → 进 #general 房间；没绑 key 时显示“微信访客”，
-  绑了 key 后以该 key 的名字出现。房里 @你、@所有人、系统消息，或有人直接
+- 给 ClawBot 直接发消息 → 进 #general 房间（不用加「聊：」前缀；加了也会自动剥掉）。
+  没绑 key 时显示“微信访客”，绑了 key 后以该 key 的名字出现。房里 @你、@所有人、系统消息，或有人直接
   回复了你从微信发的消息（reply_to 指向你的微信消息），都会发回微信私聊。
   reply_to 目标只在当轮拉到的 50 条历史里找，找不到就只按 @ 规则推。
-- 不带 `聊：` 的消息是 Atlas 命令：首次回问候，之后回“收到 ✅…”ACK，同时进
-  命令队列，hook（`wechat-commands`，每 60 秒）唤醒 Atlas，Atlas 调 Worker
-  `/reply` 把结果发回微信。
+- 命令队列已退役（2026-11-10 去前缀）：以前不带「聊：」的消息会进命令队列、由 hook
+  `wechat-commands` 唤醒 Atlas 再调 Worker `/reply` 回到微信；现在全部直接进房。
+  `/api/bridge/reply` 与 hook 保留，只用于收尾旧命令与 iLink 会话过期提醒。
 - 绑定 key：房主在管理面板建微信 key → 绑定卡给 6 位绑定码 + QR + 加入页链接
   → 用绑定了 ClawBot 的微信（luo）扫码打开加入页，把码发给 ClawBot。
   **只有 luo 的微信能用**：iLink 个人 Bot 一对一，第三方给 ClawBot 发的消息
