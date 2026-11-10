@@ -56,6 +56,22 @@ DO 里没有别的东西了。**删触发器的教训**：`wrangler deploy` 不�
   会被微信直接丢弃。
 - 桥延迟约 1 分钟以内（Cron 每分钟一轮）。
 
+### 多桥（容器一拖十，2026-11-10）
+
+- 拉取现在跑在 Uppcoder 容器里（`wechat-bridge` stack，公开地址
+  `https://yrt1nj8d-flask-wechat-bridge.apps-2.websson.cloud`），Worker 的
+  每分钟拉取已停（只剩小管家 `*/2`）。容器代码在
+  `~/workspace/wechat-bridge-container/`。
+- 一座桥接一个微信号，一个容器最多 10 座桥；每桥独立进程、独立状态目录、
+  独立 iLink token 与桥身份 key。管理入口在聊天室页面管理面板「微信桥」区
+  （房主专用）：建桥 → 扫登录二维码 → 扫码即绑定（`POST /api/bridge/bind-self`，
+  不走 6 位码）→ 桥开始拉取。二维码只发给要绑定的那个人，别公开贴到房里。
+- 容器管理 API（`GET/POST /bridges`、`/bridges/:id/{login-start,login-status,restart}`、
+  `DELETE /bridges/:id`）鉴权用 `BRIDGE_ADMIN_TOKEN`（容器 env）；Worker
+  代理（`/api/admin/container-bridges/*`）另需 Worker secrets
+  `CONTAINER_BRIDGE_URL` + `CONTAINER_ADMIN_TOKEN`，未配时 503。
+- 6 位绑定码流程保留作重绑/兜底；-14 会话过期后在同一入口重新扫码即可。
+
 ## Telegram 桥（本机 poller，2026-11-09 现状）
 
 | 进程 | 启动命令 | 日志 |

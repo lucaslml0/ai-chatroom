@@ -65,8 +65,17 @@ export function evaluateRules(rules, msg, self) {
     if (!ok) return { should_reply: false, reason: "不在白名单里" };
   }
   // @ 提及按短名匹配：名字带（…）后缀时，用户只会 @ 短名（如 @Atlas 而不是 @Atlas（muse））。
+  // 容错：去标点/大小写，并接受字母换位等拼写误差——用户常打成 Altas、A'l'ta's，这类也算 @ 到。
   const shortName = (self.name || "").split("（")[0].split("(")[0].trim();
-  const mentioned = self && (mentions.includes(self.name) || (shortName && mentions.includes(shortName)) || mentions.includes("all") || mentions.includes("所有人"));
+  const norm = (s) => String(s || "").replace(/[^a-z0-9]/gi, "").toLowerCase();
+  const sorted = (s) => [...norm(s)].sort().join("");
+  const nameHit = (m) => {
+    const nm = norm(m);
+    if (!nm) return false;
+    return nm === norm(self.name) || (shortName && nm === norm(shortName)) ||
+      sorted(m) === sorted(self.name) || (shortName && sorted(m) === sorted(shortName));
+  };
+  const mentioned = self && (mentions.some(nameHit) || mentions.includes("all") || mentions.includes("所有人"));
   const hitKeyword = (r.keywords || []).some((k) => k && text.includes(k));
   if (r.mode === "none") return { should_reply: false, reason: "模式是不自动回复" };
   if (mentioned) return { should_reply: true, reason: "被 @提及" };
@@ -458,6 +467,20 @@ export class ChatRoom {
       sql.exec(`UPDATE wechat_bind_codes SET used=1 WHERE code=?`, code);
       return json({ identity: { id: target.id, name: target.name, type: target.type } });
     }
+    // 微信绑定（扫码即绑）：桥接身份用自己的 Token，把登录确认拿到的
+    // wechat_id 直接绑到自己身上，不走 6 位绑定码。只能绑自己
+    //（identity_id 须等于调用方 id），且调用方须是 bridge=wechat 的身份。
+    if (url.pathname === "/registry/wechat-bind-self" && request.method === "POST") {
+      const req = identByToken(String(body.requester_token || ""));
+      if (!req || req.revoked || req.bridge !== "wechat") return err("需要微信桥接身份", 403);
+      const target = identById(String(body.identity_id || ""));
+      if (!target || target.id !== req.id || target.revoked) return err("只能绑定自己的身份", 403);
+      const wechatId = String(body.wechat_id || "").trim();
+      if (!wechatId) return err("缺少 wechat_id", 400);
+      sql.exec(`INSERT OR REPLACE INTO wechat_bindings(wechat_id,identity_id,wechat_name,bound_at) VALUES(?,?,?,?)`,
+        wechatId, target.id, String(body.wechat_name || wechatId).slice(0, 60), Date.now());
+      return json({ identity: { id: target.id, name: target.name, type: target.type } });
+    }
     // 按 wechat_id 解析绑定身份（bridge-message 用；身份被吊销返回 null）。
     if (url.pathname === "/registry/wechat-resolve") {
       const wechatId = url.searchParams.get("wechat_id") || "";
@@ -498,10 +521,24 @@ export class ChatRoom {
           last_from: kvGet("last_from") || null,
           seen: jsonGet("seen", {}),
           greeted: jsonGet("greeted", []),
+          bridges: jsonGet("bridges", {}),
         });
       }
       if (op === "set-state") {
         const p = body.patch || {};
+        if (body.bridge_id) {
+          // 多桥：每桥的 buf/seen 只写进自己名下的记录，不动顶层共享字段
+          //（多桥共写顶层会互相覆盖拉取游标）；顶层 last_poll_at 取各桥最大值。
+          const bridges = jsonGet("bridges", {});
+          const prev = bridges[String(body.bridge_id)] || {};
+          bridges[String(body.bridge_id)] = { ...prev, ...p, updated_at: Date.now() };
+          kvSet("bridges", JSON.stringify(bridges));
+          if (p.last_poll_at !== undefined) {
+            const cur = parseInt(kvGet("last_poll_at") || "0", 10) || 0;
+            if (p.last_poll_at > cur) kvSet("last_poll_at", String(p.last_poll_at));
+          }
+          return json({ ok: true });
+        }
         if (p.buf !== undefined) kvSet("buf", p.buf);
         if (p.session_expired_until !== undefined) kvSet("session_expired_until", String(p.session_expired_until));
         if (p.last_poll_at !== undefined) kvSet("last_poll_at", String(p.last_poll_at));
@@ -930,12 +967,17 @@ export function formatPush(room, msg) {
   return `${msg.sender_name || "?"}：${(msg.text || "").slice(0, 1000)}`;
 }
 
-// 绑定码对应的加入页 QR（SVG 字符串）。
-export function makeQrSvg(code) {
+// 任意文本的 QR（SVG 字符串）。
+export function makeQrSvgText(text) {
   const qr = qrcode(0, "M");
-  qr.addData(JOIN_PAGE + "?code=" + code);
+  qr.addData(String(text || ""));
   qr.make();
   return qr.createSvgTag(6, 24);
+}
+
+// 绑定码对应的加入页 QR（SVG 字符串）。
+export function makeQrSvg(code) {
+  return makeQrSvgText(JOIN_PAGE + "?code=" + code);
 }
 
 // ---------- iLink 客户端（与 ilink.py 同协议） ----------
@@ -1016,6 +1058,24 @@ async function wechatDoCall(env, op, payload) {
     body: JSON.stringify({ op, ...(payload || {}) }),
   });
   return r.json();
+}
+
+// 容器桥管理代理：房主经 Worker 转发到 Uppcoder 容器上的管理 API。
+// 容器地址与管理密钥走 Worker secrets；未配时返回 503，不直通容器。
+async function containerFetch(env, path, init = {}) {
+  const base = (env.CONTAINER_BRIDGE_URL || "").replace(/\/$/, "");
+  const admin = env.CONTAINER_ADMIN_TOKEN || "";
+  if (!base || !admin) return { status: 503, data: { error: "容器桥管理未配置（缺 CONTAINER_BRIDGE_URL / CONTAINER_ADMIN_TOKEN）" } };
+  try {
+    const r = await fetch(base + path, {
+      ...init,
+      headers: { "content-type": "application/json", Authorization: "Bearer " + admin, ...(init.headers || {}) },
+    });
+    const d = await r.json().catch(() => ({}));
+    return { status: r.status, data: d };
+  } catch (e) {
+    return { status: 502, data: { error: "容器桥连不上：" + (e && e.message ? e.message : String(e)) } };
+  }
 }
 
 function wechatSys(env) {
@@ -1427,6 +1487,17 @@ export default {
         const { status, data } = await regCall(env, "/registry/wechat-bind", body);
         return json(data, status);
       }
+      // 扫码即绑：桥登录确认后，用自己的 Token 把登录拿到的 wechat_id
+      // 直接绑到自己身上（不走 6 位绑定码）。
+      if (url.pathname === "/api/bridge/bind-self" && request.method === "POST") {
+        const me = await authIdentity(env, request);
+        if (!me || me.bridge !== "wechat") return err("需要微信桥接身份的 Token", 401);
+        const body = await bodyJson();
+        const { status, data } = await regCall(env, "/registry/wechat-bind-self", {
+          ...body, identity_id: me.id, requester_token: me.token,
+        });
+        return json(data, status);
+      }
       if (url.pathname === "/api/bridge/wechat-bindings" && request.method === "GET") {
         const me = await authIdentity(env, request);
         if (!me) return err("需要 Bearer token", 401);
@@ -1442,6 +1513,54 @@ export default {
         if (e) return e;
         const { status, data } = await regCall(env, "/registry/wechat-unbind", { wechat_id: decodeURIComponent(unbindMatch[1]) });
         return json(data, status);
+      }
+      // ---- 容器桥管理代理（房主专用；一座桥接一个微信号，上限 10）----
+      if (url.pathname === "/api/admin/container-bridges" && request.method === "GET") {
+        const me = await authIdentity(env, request);
+        const e = needRole(me, ["owner"]);
+        if (e) return e;
+        const { status, data } = await containerFetch(env, "/bridges");
+        return json(data, status);
+      }
+      if (url.pathname === "/api/admin/container-bridges" && request.method === "POST") {
+        const me = await authIdentity(env, request);
+        const e = needRole(me, ["owner"]);
+        if (e) return e;
+        const body = await bodyJson();
+        const { status, data } = await containerFetch(env, "/bridges", { method: "POST", body: JSON.stringify(body) });
+        return json(data, status);
+      }
+      const cbMatch = url.pathname.match(/^\/api\/admin\/container-bridges\/([^/]+)(?:\/(login-start|login-status|restart))?$/);
+      if (cbMatch) {
+        const me = await authIdentity(env, request);
+        const e = needRole(me, ["owner"]);
+        if (e) return e;
+        const bid = encodeURIComponent(cbMatch[1]);
+        const action = cbMatch[2];
+        if (!action && request.method === "GET") {
+          const { status, data } = await containerFetch(env, `/bridges/${bid}`);
+          return json(data, status);
+        }
+        if (!action && request.method === "DELETE") {
+          const { status, data } = await containerFetch(env, `/bridges/${bid}`, { method: "DELETE" });
+          return json(data, status);
+        }
+        if (action === "restart" && request.method === "POST") {
+          const { status, data } = await containerFetch(env, `/bridges/${bid}/restart`, { method: "POST" });
+          return json(data, status);
+        }
+        if (action === "login-start" && request.method === "POST") {
+          const { status, data } = await containerFetch(env, `/bridges/${bid}/login-start`, { method: "POST" });
+          if (status === 200 && data.qrcode_img_content) {
+            return json({ ...data, qr_svg: makeQrSvgText(data.qrcode_img_content) });
+          }
+          return json(data, status);
+        }
+        if (action === "login-status" && request.method === "GET") {
+          const { status, data } = await containerFetch(env, `/bridges/${bid}/login-status`);
+          return json(data, status);
+        }
+        return err("unknown api", 404);
       }
       if (url.pathname === "/api/rooms" && request.method === "POST") {
         const me = await authIdentity(env, request);
@@ -1566,12 +1685,20 @@ export default {
         const state = await wechatDoCall(env, "get-state", {}).catch(() => ({}));
         const cmds = await wechatDoCall(env, "list-commands", { status: "pending" }).catch(() => ({ commands: [] }));
         const now = Date.now();
+        const bridgeList = Object.entries(state.bridges || {}).map(([id, b]) => ({
+          id,
+          last_poll_at: b.last_poll_at || 0,
+          session_expired: !!(b.session_expired_until && now < b.session_expired_until),
+          session_expired_until: b.session_expired_until || 0,
+        }));
+        const maxPoll = bridgeList.reduce((m, b) => Math.max(m, b.last_poll_at), state.last_poll_at || 0);
         return json({
           ok: true, service: "ai-chatroom", version: "2.6",
-          session_expired: !!(state.session_expired_until && now < state.session_expired_until),
+          session_expired: !!(state.session_expired_until && now < state.session_expired_until) || bridgeList.some((b) => b.session_expired),
           session_expired_until: state.session_expired_until || 0,
-          last_poll_at: state.last_poll_at || 0,
+          last_poll_at: maxPoll,
           pending_commands: (cmds.commands || []).length,
+          bridges: bridgeList,
         });
       }
       if (url.pathname === "/api/bridge/commands" && request.method === "GET") {
@@ -1597,7 +1724,7 @@ export default {
       if (url.pathname === "/api/bridge/seed-state" && request.method === "POST") {
         if (!needBridgeToken(request, env)) return err("需要 BRIDGE_TOKEN", 401);
         const body = await bodyJson();
-        if (body.patch) await wechatDoCall(env, "set-state", { patch: body.patch });
+        if (body.patch) await wechatDoCall(env, "set-state", { patch: body.patch, bridge_id: body.bridge_id });
         let n = 0;
         for (const c of (body.contexts || [])) {
           if (c.wechat_id && c.context_token) {

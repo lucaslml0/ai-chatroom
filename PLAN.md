@@ -291,6 +291,28 @@
 - `bridge-message` 扩展：接受可选 `wechat_id`；platform=wechat 且有绑定时
   以绑定身份（真实 id/名字/类型）发言，否则走现有访客逻辑。
 
+### 16.3b 多桥（2026-11-10，容器一拖十）
+
+- 一座桥接一个微信号（iLink 个人 Bot 一对一：一个微信只能给自己的 ClawBot
+  发消息），一个容器最多 10 座桥；每桥独立进程、独立状态目录、独立
+  iLink token 与桥身份 key。超 10 座建桥返回错误。
+- 新桥流程（管理面板「微信桥」区，房主专用）：填名字 → 建微信 key
+  （platform=wechat、bridge=wechat）→ 容器建桥槽 → 显示登录二维码 →
+  要绑定的微信扫码确认 → 容器拿 bot token、调 `POST /api/bridge/bind-self`
+  扫码即绑定（不走 6 位码；登录确认返回的 `ilink_user_id` 与 getupdates
+  的 `from_user_id` 是同一个值，已验证）→ 桥开始拉取。
+- 登录二维码过期自动刷新最多 3 次；会话 -14 过期后同一入口重新扫码
+  （替代以前本机 `wechat.py login-start` 手工重登）。
+- 每桥状态只写自己名下的 DO 记录（`seed-state` 带 `bridge_id`；
+  `get-state`/`set-state` 支持 `bridges` 映射），顶层 `last_poll_at` 取
+  各桥最大值，顶层 `buf`/`seen` 不再由桥回写（多桥共写会互相覆盖游标）。
+  `GET /api/bridge/health` 返回 `bridges` 列表与聚合值。
+- Worker 代理容器管理 API（房主专用）：`GET/POST /api/admin/container-bridges`
+  与 `/api/admin/container-bridges/:id/{login-start,login-status,restart}`、
+  `DELETE /api/admin/container-bridges/:id`，经 `CONTAINER_BRIDGE_URL` +
+  `CONTAINER_ADMIN_TOKEN`（Worker secrets）转发；未配时 503。
+- 6 位绑定码流程保留，作为重绑/兜底。
+
 ### 16.4 回推（Worker → 微信）
 
 每轮取房里本平台外的新消息：@某绑定身份的名字 → 发给该微信号；@所有人 /

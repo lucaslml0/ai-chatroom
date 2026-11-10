@@ -9,6 +9,7 @@ import {
   routePushTargets,
   formatPush,
   makeQrSvg,
+  makeQrSvgText,
   runPollCycle,
   handleReply,
 } from "./src/index.js";
@@ -48,9 +49,21 @@ class MockSys {
         last_from: this.kv.last_from || null,
         seen: this.kv.seen || {},
         greeted: this.kv.greeted || [],
+        bridges: this.kv.bridges || {},
       };
     }
     if (op === "set-state") {
+      // 与 src/index.js 的 DO 逻辑同源：带 bridge_id 只写该桥名下记录，
+      // 顶层 last_poll_at 取最大值；不带则走旧的顶层写入。
+      if (p.bridge_id) {
+        const bridges = this.kv.bridges || {};
+        bridges[String(p.bridge_id)] = { ...(bridges[String(p.bridge_id)] || {}), ...(p.patch || {}), updated_at: Date.now() };
+        this.kv.bridges = bridges;
+        if (p.patch && p.patch.last_poll_at !== undefined) {
+          this.kv.last_poll_at = Math.max(this.kv.last_poll_at || 0, p.patch.last_poll_at);
+        }
+        return { ok: true };
+      }
       Object.assign(this.kv, p.patch || {});
       return { ok: true };
     }
@@ -331,6 +344,26 @@ check(
   svg.startsWith("<svg") && svg.includes("</svg>") && svg.length > 500,
 );
 check("QR：不同码不同图", makeQrSvg("AAAAAA") !== makeQrSvg("BBBBBB"));
+check(
+  "QR 文本：任意文本成 SVG",
+  makeQrSvgText("https://example.com/login?q=abc").startsWith("<svg") &&
+    makeQrSvgText("https://example.com/login?q=abc").includes("</svg>"),
+);
+check("QR 文本：不同文本不同图", makeQrSvgText("aaa") !== makeQrSvgText("bbb"));
+
+// ---------- 14. 多桥：每桥状态命名空间（不互相覆盖 buf/seen） ----------
+{
+  const sys = new MockSys();
+  await sys.doCall("set-state", { patch: { buf: "buf-main", last_poll_at: 100 }, bridge_id: "bridge-1" });
+  await sys.doCall("set-state", { patch: { buf: "buf-b", last_poll_at: 200 }, bridge_id: "bridge-2" });
+  const st = await sys.doCall("get-state", {});
+  check("多桥：两桥 buf 各自保存", st.bridges["bridge-1"].buf === "buf-main" && st.bridges["bridge-2"].buf === "buf-b", JSON.stringify(st.bridges));
+  check("多桥：顶层 buf 不被桥回写覆盖", st.buf === "", JSON.stringify(st.buf));
+  check("多桥：顶层 last_poll_at 取各桥最大值", st.last_poll_at === 200, String(st.last_poll_at));
+  await sys.doCall("set-state", { patch: { buf: "buf-legacy", last_poll_at: 50 } });
+  const st2 = await sys.doCall("get-state", {});
+  check("多桥：无 bridge_id 的旧写入仍走顶层", st2.buf === "buf-legacy" && st2.bridges["bridge-1"].buf === "buf-main", JSON.stringify(st2));
+}
 
 // ---------- 4. runPollCycle：绑定成功 ----------
 {
