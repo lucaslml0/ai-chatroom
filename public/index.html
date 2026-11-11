@@ -210,6 +210,11 @@ pre{background:#10131a;border:1px solid var(--line);border-radius:8px;padding:10
   body[data-mobiletab="approval"] #abmodal{display:block;position:fixed;left:0;right:0;top:var(--mtop,96px);bottom:0;z-index:45}
   body[data-mobiletab="approval"] .ab-modal-backdrop{display:none}
   body[data-mobiletab="approval"] .ab-modal{max-width:none;max-height:none;height:100%;margin:0;border:none;border-radius:0;padding:14px;overflow-y:auto}
+  /* 手机聊天页：审批看板入口整块去掉；工作台入口只剩工位状态灯，不留文字 */
+  #abentry{display:none}
+  #wbentry{margin-top:8px;padding:6px 12px}
+  #wbentry .wb-head,#wbentry .wb-counts,#wbentry #wbupdated{display:none}
+  #wbentry .wb-dots{margin-top:0}
 }
 </style>
 <script src="https://cdn.jsdelivr.net/npm/three@0.152.2/build/three.min.js"></script>
