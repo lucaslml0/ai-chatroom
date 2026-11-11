@@ -896,6 +896,10 @@ function initWorkbench3D(){
   }
   // 工位名牌：名 + 编号 · 分工（与独立 3D 工作台一致）
   const PLATE={"UNIT-01":["Atlas","UNIT-01 · 总控"],"UNIT-02":["Marley","UNIT-02 · 创意与文案"],"UNIT-03":["WorkBuddy","UNIT-03 · 国内版"],"UNIT-04":["WorkBuddy","UNIT-04 · 网页代办"],"UNIT-05":["Gemini","UNIT-05 · 推理与代码"],"UNIT-06":["Ren","UNIT-06 · 长文与分析"],"UNIT-07":["Moderator","UNIT-07 · 小管家"],"UNIT-08":["Hark","UNIT-08 · 派活与跟进"]};
+  // 小人衣服颜色（每工位一个）
+  const SHIRT={"UNIT-01":0xd97b5f,"UNIT-02":0x5f8fd9,"UNIT-03":0x6abf7b,"UNIT-04":0xc9a85a,"UNIT-05":0x9a6ac9,"UNIT-06":0x5ac9b8,"UNIT-07":0xc95a7a,"UNIT-08":0x7a9ac9};
+  const skinMat=new THREE.MeshStandardMaterial({color:0xeec39a,roughness:0.7});
+  const hairMat=new THREE.MeshStandardMaterial({color:0x3a2f28,roughness:0.9});
   for(const id of STATION_IDS){
     const pos=STATION_POS[id];if(!pos)continue;
     const g=new THREE.Group();
@@ -913,6 +917,13 @@ function initWorkbench3D(){
     const lamp=new THREE.Mesh(new THREE.SphereGeometry(0.09,16,12),new THREE.MeshStandardMaterial({color:0x3ecf8e,emissive:0x3ecf8e,emissiveIntensity:0.9}));
     lamp.position.set(0.62,0.95,-0.1);g.add(lamp);
     const pole=new THREE.Mesh(new THREE.CylinderGeometry(0.02,0.02,0.18,8),darkMat);pole.position.set(0.62,0.86,-0.1);g.add(pole);
+    // 椅子上的小人（坐姿，面朝桌子）
+    const shirtMat=new THREE.MeshStandardMaterial({color:SHIRT[id]||0x8a9ab0,roughness:0.8});
+    const torso=new THREE.Mesh(new THREE.BoxGeometry(0.34,0.44,0.26),shirtMat);torso.position.set(0,0.72,0.78);g.add(torso);
+    const head=new THREE.Mesh(new THREE.SphereGeometry(0.16,16,12),skinMat);head.position.set(0,1.10,0.78);g.add(head);
+    const hair=new THREE.Mesh(new THREE.SphereGeometry(0.17,16,12,0,Math.PI*2,0,Math.PI/2),hairMat);hair.position.set(0,1.11,0.79);g.add(hair);
+    const armL=new THREE.Mesh(new THREE.BoxGeometry(0.08,0.3,0.08),shirtMat);armL.position.set(-0.21,0.72,0.68);armL.rotation.x=-0.5;g.add(armL);
+    const armR=new THREE.Mesh(new THREE.BoxGeometry(0.08,0.3,0.08),shirtMat);armR.position.set(0.21,0.72,0.68);armR.rotation.x=-0.5;g.add(armR);
     lights[id]=lamp;
     g.position.set(pos[0],0,pos[1]);
     scene.add(g);
