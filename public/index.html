@@ -109,6 +109,9 @@ pre{background:#10131a;border:1px solid var(--line);border-radius:8px;padding:10
 #wb3d{position:relative;height:300px;background:#0b0e13}
 #wb3d canvas{display:block;width:100%;height:100%}
 #wb3dfallback{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;color:var(--dim);font-size:13px;padding:16px;text-align:center}
+.wb3d-hint{position:absolute;top:10px;left:10px;z-index:2;background:rgba(16,19,26,.75);color:var(--dim);font-size:12px;padding:4px 10px;border-radius:16px;pointer-events:none;white-space:nowrap}
+.wb3d-zoom{position:absolute;right:10px;bottom:10px;z-index:2;display:flex;gap:8px}
+.wb3d-zoom button{width:38px;height:38px;border-radius:50%;font-size:20px;line-height:1;padding:0;background:rgba(16,19,26,.85);border:1px solid var(--line)}
 #wbfloatsummary{max-height:220px;overflow-y:auto;padding:12px 14px;border-top:1px solid var(--line)}
 .wb-task{cursor:pointer}
 .wb-task:hover{border-color:var(--acc)}
@@ -390,7 +393,7 @@ pre{background:#10131a;border:1px solid var(--line);border-radius:8px;padding:10
     <span class="wb-float-btns"><button id="wbreset" title="复位视角">↺ 视角</button><button id="wbmin" title="最小化">−</button><button id="wbclose" title="关闭">✕</button></span>
   </div>
   <div id="wbfloatbody">
-    <div id="wb3d"></div>
+    <div id="wb3d"><div class="wb3d-hint">拖拽旋转 · 双指缩放 · 点工位查看</div><div class="wb3d-zoom"><button id="wbzoomin" title="放大">＋</button><button id="wbzoomout" title="缩小">－</button></div></div>
     <div id="wbfloatsummary"></div>
   </div>
 </div>
@@ -840,8 +843,8 @@ function initWorkbench3D(){
   if(wb3d)return;
   const host=$("#wb3d");if(!host)return;
   if(typeof THREE==="undefined"){
-    host.innerHTML=`<div id="wb3dfallback">3D 未加载（Three.js CDN 不可用），任务列表见下方。</div>`;
-    return;
+    const fb=document.createElement("div");fb.id="wb3dfallback";fb.textContent="3D 未加载（Three.js CDN 不可用），任务列表见下方。";
+    host.appendChild(fb);return;
   }
   const W=host.clientWidth||520,H=host.clientHeight||300;
   const renderer=new THREE.WebGLRenderer({antialias:true});
@@ -882,18 +885,21 @@ function initWorkbench3D(){
   const darkMat=new THREE.MeshStandardMaterial({color:0x232830,roughness:0.4});
   const screenMat=new THREE.MeshStandardMaterial({color:0x1a2a3a,roughness:0.2,metalness:0.4,emissive:0x0a1a2a});
   const lights={};
-  function nameTexture(text){
-    const cv=document.createElement("canvas");cv.width=256;cv.height=64;
+  function nameTexture(name,sub){
+    const cv=document.createElement("canvas");cv.width=256;cv.height=80;
     const ctx=cv.getContext("2d");
-    ctx.fillStyle="#1e222d";ctx.fillRect(0,0,256,64);
-    ctx.fillStyle="#e8eaf0";ctx.font="bold 26px sans-serif";ctx.textAlign="center";ctx.textBaseline="middle";
-    ctx.fillText(text,128,34);
+    ctx.fillStyle="#1e222d";ctx.fillRect(0,0,256,80);
+    ctx.textAlign="center";ctx.textBaseline="middle";
+    ctx.fillStyle="#e8eaf0";ctx.font="bold 26px sans-serif";ctx.fillText(name,128,26);
+    ctx.fillStyle="#9aa3b2";ctx.font="15px sans-serif";ctx.fillText(sub,128,58);
     const tex=new THREE.CanvasTexture(cv);tex.anisotropy=4;return tex;
   }
-  const SHORT={"UNIT-01":"Atlas","UNIT-02":"Marley","UNIT-03":"WB·国内","UNIT-04":"WB·网页","UNIT-05":"Gemini","UNIT-06":"Ren","UNIT-07":"小管家","UNIT-08":"Hark"};
+  // 工位名牌：名 + 编号 · 分工（与独立 3D 工作台一致）
+  const PLATE={"UNIT-01":["Atlas","UNIT-01 · 总控"],"UNIT-02":["Marley","UNIT-02 · 创意与文案"],"UNIT-03":["WorkBuddy","UNIT-03 · 国内版"],"UNIT-04":["WorkBuddy","UNIT-04 · 网页代办"],"UNIT-05":["Gemini","UNIT-05 · 推理与代码"],"UNIT-06":["Ren","UNIT-06 · 长文与分析"],"UNIT-07":["Moderator","UNIT-07 · 小管家"],"UNIT-08":["Hark","UNIT-08 · 派活与跟进"]};
   for(const id of STATION_IDS){
     const pos=STATION_POS[id];if(!pos)continue;
     const g=new THREE.Group();
+    g.userData.stationId=id;
     const desk=new THREE.Mesh(new THREE.BoxGeometry(1.5,0.08,0.8),deskMat);desk.position.y=0.74;g.add(desk);
     const legL=new THREE.Mesh(new THREE.BoxGeometry(0.08,0.74,0.7),darkMat);legL.position.set(-0.65,0.37,0);g.add(legL);
     const legR=legL.clone();legR.position.x=0.65;g.add(legR);
@@ -901,7 +907,8 @@ function initWorkbench3D(){
     const stand=new THREE.Mesh(new THREE.BoxGeometry(0.08,0.28,0.08),darkMat);stand.position.set(0,0.9,-0.18);g.add(stand);
     const chair=new THREE.Mesh(new THREE.BoxGeometry(0.5,0.5,0.5),new THREE.MeshStandardMaterial({color:0x3a4a5a,roughness:0.8}));chair.position.set(0,0.25,0.75);g.add(chair);
     const chairBack=new THREE.Mesh(new THREE.BoxGeometry(0.5,0.55,0.08),chair.material);chairBack.position.set(0,0.75,0.98);g.add(chairBack);
-    const plate=new THREE.Mesh(new THREE.PlaneGeometry(1.1,0.28),new THREE.MeshBasicMaterial({map:nameTexture(SHORT[id]||id)}));
+    const pl=PLATE[id]||[id,""];
+    const plate=new THREE.Mesh(new THREE.PlaneGeometry(1.1,0.34),new THREE.MeshBasicMaterial({map:nameTexture(pl[0],pl[1])}));
     plate.position.set(0,1.55,-0.1);g.add(plate);
     const lamp=new THREE.Mesh(new THREE.SphereGeometry(0.09,16,12),new THREE.MeshStandardMaterial({color:0x3ecf8e,emissive:0x3ecf8e,emissiveIntensity:0.9}));
     lamp.position.set(0.62,0.95,-0.1);g.add(lamp);
@@ -942,19 +949,49 @@ function initWorkbench3D(){
     camera.lookAt(orbit.target);
   }
   applyCamera();
-  let dragging=false,px=0,py=0;
+  let dragging=false,px=0,py=0,downX=null,downY=null,downT=0,pinchDist=0;
+  const pointers=new Map();
   const el=renderer.domElement;
   el.style.touchAction="none";
-  el.addEventListener("pointerdown",e=>{dragging=true;px=e.clientX;py=e.clientY;orbit.auto=false;el.setPointerCapture(e.pointerId);});
+  el.addEventListener("pointerdown",e=>{
+    pointers.set(e.pointerId,{x:e.clientX,y:e.clientY});
+    el.setPointerCapture(e.pointerId);
+    if(pointers.size===2){
+      const pts=[...pointers.values()];
+      pinchDist=Math.hypot(pts[0].x-pts[1].x,pts[0].y-pts[1].y);
+      dragging=false;
+    }else if(pointers.size===1){
+      dragging=true;px=e.clientX;py=e.clientY;orbit.auto=false;
+      downX=e.clientX;downY=e.clientY;downT=Date.now();
+    }
+  });
   el.addEventListener("pointermove",e=>{
+    if(!pointers.has(e.pointerId))return;
+    pointers.set(e.pointerId,{x:e.clientX,y:e.clientY});
+    if(pointers.size===2){
+      const pts=[...pointers.values()];
+      const d=Math.hypot(pts[0].x-pts[1].x,pts[0].y-pts[1].y);
+      if(pinchDist>0){orbit.radius=Math.max(7,Math.min(20,orbit.radius*pinchDist/d));applyCamera();}
+      pinchDist=d;
+      return;
+    }
     if(!dragging)return;
     const dx=e.clientX-px,dy=e.clientY-py;px=e.clientX;py=e.clientY;
     orbit.theta-=dx*0.005;orbit.phi=Math.max(0.35,Math.min(1.35,orbit.phi-dy*0.005));
     applyCamera();
   });
-  const endDrag=()=>{dragging=false;};
-  el.addEventListener("pointerup",endDrag);
-  el.addEventListener("pointercancel",endDrag);
+  const endPointer=e=>{
+    const wasDownX=downX,wasDownY=downY,wasDownT=downT;
+    pointers.delete(e.pointerId);
+    if(pointers.size<2)pinchDist=0;
+    if(pointers.size===0){
+      dragging=false;
+      if(wasDownX!==null&&Math.hypot(e.clientX-wasDownX,e.clientY-wasDownY)<6&&Date.now()-wasDownT<500){handleStationClick(e);}
+      downX=null;downY=null;
+    }
+  };
+  el.addEventListener("pointerup",endPointer);
+  el.addEventListener("pointercancel",endPointer);
   el.addEventListener("wheel",e=>{e.preventDefault();orbit.radius=Math.max(7,Math.min(20,orbit.radius+e.deltaY*0.01));applyCamera();},{passive:false});
   function resize(){
     const w=host.clientWidth||520,h=host.clientHeight||300;
@@ -990,6 +1027,35 @@ function wbFocusStation(stationId,el){
   wb3d.orbit.target.set(pos[0],1.0,pos[1]);
   wb3d.orbit.radius=7;wb3d.orbit.auto=false;wb3d.applyCamera();
   if(el){el.classList.add("focused");setTimeout(()=>el.classList.remove("focused"),1200);}
+}
+// 点工位查看：点 3D 里的工位，镜头转过去并高亮该工位在任务板里的任务（只读查看，不派活）
+function handleStationClick(e){
+  if(!wb3d||typeof THREE==="undefined")return;
+  const cv=document.querySelector("#wb3d canvas");if(!cv)return;
+  const rect=cv.getBoundingClientRect();
+  const nx=((e.clientX-rect.left)/rect.width)*2-1;
+  const ny=-((e.clientY-rect.top)/rect.height)*2+1;
+  const ray=new THREE.Raycaster();
+  ray.setFromCamera(new THREE.Vector2(nx,ny),wb3d.camera);
+  const hits=ray.intersectObjects(wb3d.scene.children,true);
+  for(const h of hits){
+    let o=h.object;
+    while(o){
+      if(o.userData&&o.userData.stationId){wbFocusStation(o.userData.stationId);highlightStationTasks(o.userData.stationId);return;}
+      o=o.parent;
+    }
+  }
+}
+function highlightStationTasks(stationId){
+  const box=$("#wbfloatsummary");if(!box)return;
+  const tasks=box.querySelectorAll(".wb-task");
+  let first=null;
+  tasks.forEach(t=>{
+    const match=t.getAttribute("data-station")===stationId;
+    t.classList.toggle("focused",match);
+    if(match){if(!first)first=t;setTimeout(()=>t.classList.remove("focused"),2500);}
+  });
+  if(first)first.scrollIntoView({behavior:"smooth",block:"nearest"});
 }
 // 悬浮窗拖动（标题栏拖动，位置记内存，不持久化）
 function initWorkbenchFloatDrag(){
@@ -1506,6 +1572,8 @@ curl -X POST ${api}/api/evaluate \\
   $("#wbclose").onclick=()=>{if(isMobile()&&mobileTab==="workbench"){setMobileTab("chat");}else{closeWorkbenchFloat();}};
   $("#wbmin").onclick=minimizeWorkbenchFloat;
   $("#wbreset").onclick=()=>{if(wb3d&&wb3d.resetView)wb3d.resetView();};
+  $("#wbzoomin").onclick=()=>{if(wb3d&&wb3d.orbit){wb3d.orbit.radius=Math.max(7,wb3d.orbit.radius-1.5);wb3d.orbit.auto=false;wb3d.applyCamera();}};
+  $("#wbzoomout").onclick=()=>{if(wb3d&&wb3d.orbit){wb3d.orbit.radius=Math.min(20,wb3d.orbit.radius+1.5);wb3d.orbit.auto=false;wb3d.applyCamera();}};
   initWorkbenchFloatDrag();
   if(isMobile()){setMobileTab("chat");}else{openWorkbenchFloat();}
   $("#abentry").onclick=()=>{if(isMobile()){setMobileTab(mobileTab==="approval"?"chat":"approval");}else{openApprovalModal();}};
