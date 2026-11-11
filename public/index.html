@@ -59,10 +59,16 @@ section#chat{display:flex;flex-direction:column;min-width:0;min-height:0}
 #composer{border-top:1px solid var(--line);padding:12px 16px;display:flex;gap:8px;align-items:flex-end}
 #composer textarea{flex:1;resize:none;max-height:120px;overflow-y:auto}
 #replybar{padding:6px 16px 0;color:var(--dim);font-size:13px;display:none}
+#attachbar{padding:6px 16px 0;display:none;flex-wrap:wrap;gap:6px}
+.attach-chip{display:inline-flex;align-items:center;gap:6px;border:1px solid var(--line);background:var(--panel2);border-radius:16px;padding:3px 6px 3px 10px;font-size:12px;max-width:100%}
+.attach-chip .an{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;max-width:220px}
+.attach-chip button{padding:0 7px;font-size:12px;border-radius:12px}
+.attach-chip.uploading{opacity:.65}
+.attach-chip.err{border-color:#c0392b;color:#ff8a80}
 #whoami{padding:6px 16px 0;color:var(--dim);font-size:12px;display:flex;gap:6px;align-items:center;flex:none}
 #whoami button{padding:1px 8px;font-size:12px}
 #whoami b{color:var(--txt)}
-#topic,#filters,#typing,#replybar,#whoami,#composer{flex:none}
+#topic,#filters,#typing,#replybar,#attachbar,#whoami,#composer{flex:none}
 aside#panel{border-left:1px solid var(--line);border-right:none;padding:14px;overflow:auto}
 aside#panel h3{margin:6px 0;font-size:15px}
 aside#panel h4{margin:16px 0 4px;font-size:13px;color:var(--dim)}
@@ -78,6 +84,76 @@ pre{background:#10131a;border:1px solid var(--line);border-radius:8px;padding:10
 .legend{display:flex;gap:10px;flex-wrap:wrap;font-size:12px;color:var(--dim);margin:6px 0}
 #menubtn,#mobilebar,#panelclose{display:none}
 #backdrop{display:none}
+/* 3D 工作台入口（小动态图）+ 任务板弹窗 */
+#wbentry{border:1px solid var(--line);border-radius:10px;padding:10px 12px;margin-top:14px;background:var(--panel);cursor:pointer}
+#wbentry:hover{border-color:var(--acc)}
+.wb-head{display:flex;align-items:center;gap:8px;font-weight:700;font-size:14px}
+.wb-pulse{width:9px;height:9px;border-radius:50%;background:#3ecf8e;flex:none;animation:wb-pulse 2s ease-in-out infinite}
+@keyframes wb-pulse{0%,100%{opacity:1;transform:scale(1)}50%{opacity:.45;transform:scale(.8)}}
+.wb-counts{display:flex;gap:10px;flex-wrap:wrap;font-size:13px;color:var(--dim);margin-top:6px}
+.wb-counts b{color:var(--txt);font-size:15px}
+.wb-dots{display:flex;gap:5px;flex-wrap:wrap;margin-top:8px}
+.wb-dot{width:10px;height:10px;border-radius:50%;background:#3ecf8e;flex:none}
+.wb-dot.busy{background:#ffb74d;animation:wb-pulse 2s ease-in-out infinite}
+.wb-dot.unassigned{background:#555}
+#wbupdated{margin-top:6px}
+/* 3D 工作台顶层悬浮窗（可拖动，内嵌真 3D 场景） */
+#wbfloat{position:fixed;z-index:90;width:540px;max-width:94vw;right:18px;top:70px;background:var(--bg);border:1px solid var(--line);border-radius:12px;box-shadow:0 10px 40px rgba(0,0,0,.5);display:none;overflow:hidden}
+#wbfloat.open{display:block}
+#wbfloat.minimized #wbfloatbody{display:none}
+.wb-float-head{display:flex;align-items:center;justify-content:space-between;gap:10px;padding:10px 12px;background:var(--panel);cursor:move;user-select:none;-webkit-user-select:none;touch-action:none}
+.wb-float-head h3{margin:0;font-size:15px}
+.wb-float-btns{display:flex;gap:6px}
+.wb-float-btns button{padding:2px 10px;font-size:14px;line-height:1.4}
+#wb3d{position:relative;height:300px;background:#0b0e13}
+#wb3d canvas{display:block;width:100%;height:100%}
+#wb3dfallback{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;color:var(--dim);font-size:13px;padding:16px;text-align:center}
+#wbfloatsummary{max-height:220px;overflow-y:auto;padding:12px 14px;border-top:1px solid var(--line)}
+.wb-task{cursor:pointer}
+.wb-task:hover{border-color:var(--acc)}
+.wb-task.focused{border-color:var(--acc);box-shadow:0 0 0 1px var(--acc)}
+@media(max-width:900px){
+  #wbfloat{width:92vw;right:4vw;left:4vw;top:64px}
+  #wb3d{height:230px}
+  #wbfloatsummary{max-height:180px}
+}
+.wb-stats{display:flex;gap:14px;flex-wrap:wrap;font-size:13px;color:var(--dim);margin:10px 0}
+.wb-stats b{color:var(--txt);font-size:15px}
+.wb-group{margin-top:14px}
+.wb-group h4{margin:0 0 6px;font-size:14px}
+.wb-task{border:1px solid var(--line);border-radius:8px;padding:8px 10px;margin-bottom:6px;background:var(--panel);font-size:14px}
+.wb-task .wb-meta{font-size:12px;color:var(--dim);margin-top:2px}
+.wb-empty{color:var(--dim);font-size:13px;padding:4px 0}
+.wb-stations{display:flex;gap:6px;flex-wrap:wrap;margin-top:6px}
+.wb-station{font-size:12px;border:1px solid var(--line);border-radius:20px;padding:2px 10px}
+.wb-station.busy{border-color:#ffb74d;color:#ffcc80}
+/* Agent 审批看板入口 + 弹窗（与 3D 工作台入口同款式） */
+#abentry{border:1px solid var(--line);border-radius:10px;padding:10px 12px;margin-top:10px;background:var(--panel);cursor:pointer}
+#abentry:hover{border-color:var(--acc)}
+#abentry.has-pending{border-color:#ffb74d}
+.ab-head{display:flex;align-items:center;gap:8px;font-weight:700;font-size:14px}
+.ab-pulse{width:9px;height:9px;border-radius:50%;background:#3ecf8e;flex:none}
+.ab-pulse.on{background:#ffb74d;animation:wb-pulse 2s ease-in-out infinite}
+.ab-counts{display:flex;gap:10px;flex-wrap:wrap;font-size:13px;color:var(--dim);margin-top:6px}
+.ab-counts b{color:var(--txt);font-size:15px}
+#abupdated{margin-top:6px}
+#abmodal{position:fixed;inset:0;z-index:80;display:none}
+#abmodal.open{display:block}
+.ab-modal-backdrop{position:absolute;inset:0;background:rgba(0,0,0,.6)}
+.ab-modal{position:relative;max-width:min(92vw,720px);max-height:86vh;margin:6vh auto 0;background:var(--bg);border:1px solid var(--line);border-radius:12px;padding:16px;overflow-y:auto}
+.ab-modal-head{display:flex;align-items:center;justify-content:space-between;gap:10px}
+.ab-modal-head h3{margin:0;font-size:17px}
+.ab-stats{display:flex;gap:14px;flex-wrap:wrap;font-size:13px;color:var(--dim);margin:10px 0}
+.ab-stats b{color:var(--txt);font-size:15px}
+.ab-group{margin-top:14px}
+.ab-group h4{margin:0 0 6px;font-size:14px}
+.ab-item{border:1px solid var(--line);border-radius:8px;padding:8px 10px;margin-bottom:6px;background:var(--panel);font-size:14px}
+.ab-item .ab-meta{font-size:12px;color:var(--dim);margin-top:2px}
+.ab-item .ab-detail{font-size:13px;color:var(--txt);margin-top:4px}
+.ab-empty{color:var(--dim);font-size:13px;padding:4px 0}
+.ab-risk-high{color:#ff8a80}
+.ab-risk-medium{color:#ffcc80}
+.ab-risk-low{color:#9aa3b2}
 @media(max-width:900px){
   /* 手机：定高应用壳（100dvh 纵向 flex），聊天区 flex:1 占主体；
      房间改横向可滑 chips，成员默认收起，右侧面板变右侧抽屉；
@@ -119,6 +195,7 @@ pre{background:#10131a;border:1px solid var(--line);border-radius:8px;padding:10
   #composer button{flex:none}
 }
 </style>
+<script src="https://cdn.jsdelivr.net/npm/three@0.152.2/build/three.min.js"></script>
 </head>
 <body>
 <header>
@@ -143,6 +220,17 @@ pre{background:#10131a;border:1px solid var(--line);border-radius:8px;padding:10
       <span>👤 人类</span><span>🤖 Agent</span><span>⚙️ Bot</span>
       <span>🌐 网页</span><span>💬 微信</span><span>✈️ Telegram</span><span>🔌 API</span>
     </div>
+    <div id="wbentry" title="点击打开/关闭 3D 工作台悬浮窗">
+      <div class="wb-head"><span>🧑‍💼 3D 工作台</span><span class="wb-pulse"></span></div>
+      <div class="wb-counts"><span>待认领 <b id="wb-waiting">—</b></span><span>进行中 <b id="wb-progress">—</b></span><span>已完成 <b id="wb-done">—</b></span></div>
+      <div class="wb-dots" id="wbdots"></div>
+      <div class="note" id="wbupdated">加入后自动同步任务板</div>
+    </div>
+    <div id="abentry" title="点开放大查看 Agent 审批看板">
+      <div class="ab-head"><span>🛡 Agent 审批看板</span><span class="ab-pulse" id="abpulse"></span></div>
+      <div class="ab-counts"><span>待审批 <b id="ab-pending">—</b></span><span>待选择 <b id="ab-choice">—</b></span><span>已处理 <b id="ab-resolved">—</b></span></div>
+      <div class="note" id="abupdated">加入后自动同步审批看板</div>
+    </div>
   </aside>
 
   <section id="chat">
@@ -157,8 +245,11 @@ pre{background:#10131a;border:1px solid var(--line);border-radius:8px;padding:10
     <div id="msgs"></div>
     <div id="typing"></div>
     <div id="replybar"></div>
+    <div id="attachbar"></div>
     <div id="whoami">当前身份：未加入</div>
     <div id="composer">
+      <button id="attachbtn" title="先用 Token 加入" disabled style="flex:none">📎</button>
+      <input type="file" id="filepick" multiple style="display:none">
       <textarea id="input" rows="1" placeholder="输入消息，Alt/⌘+回车发送，@名字 可以提及某人，@Moderator 问小管家…" autocomplete="off"></textarea>
       <button class="primary" id="send">发送</button>
     </div>
@@ -203,6 +294,35 @@ pre{background:#10131a;border:1px solid var(--line);border-radius:8px;padding:10
         <label>新桥名字</label><input id="bridgename" placeholder="如 朋友A的微信">
         <button id="createbridge" style="width:100%;margin-top:8px">＋新建桥（先建微信 key，再扫码绑定）</button>
         <div id="bridgeqr" style="display:none"></div>
+        <h4>📁 文件存储</h4>
+        <p class="note">成员上传的图片、文档、视频存在这里。R2 走 Worker 绑定不用填密钥；S3 填兼容存储的密钥；WebDAV 填服务器地址和账号。密钥只显示占位符，不改就原样保存。</p>
+        <label>存储方式</label>
+        <select id="storageprovider">
+          <option value="none">未配置（不开放上传）</option>
+          <option value="r2">Cloudflare R2（Worker 绑定）</option>
+          <option value="s3">S3 兼容存储</option>
+          <option value="webdav">WebDAV</option>
+        </select>
+        <div id="storager2" style="display:none"><p class="note">R2 走 Worker 绑定（bucket：ai-chatroom-files），不用填密钥。</p></div>
+        <div id="storages3" style="display:none">
+          <label>Endpoint</label><input id="s3endpoint" placeholder="https://s3.example.com" autocomplete="off">
+          <label>Region</label><input id="s3region" placeholder="如 us-east-1" autocomplete="off">
+          <label>Bucket</label><input id="s3bucket" placeholder="如 ai-chatroom-files" autocomplete="off">
+          <label>Access Key ID</label><input id="s3keyid" autocomplete="off">
+          <label>Secret Access Key</label><input id="s3secret" type="password" autocomplete="off">
+        </div>
+        <div id="storagewebdav" style="display:none">
+          <label>WebDAV 地址</label><input id="davurl" placeholder="https://dav.example.com/remote.php/dav/files/user/" autocomplete="off">
+          <label>用户名</label><input id="davuser" autocomplete="off">
+          <label>密码</label><input id="davpass" type="password" autocomplete="off">
+        </div>
+        <label>单个文件上限（MB，1–50，默认 10）</label>
+        <input id="storagemaxmb" type="number" min="1" max="50" value="10">
+        <div style="display:flex;gap:8px;margin-top:8px">
+          <button id="storagetest" style="flex:1">测试连接</button>
+          <button id="storagesave" class="primary" style="flex:1">保存配置</button>
+        </div>
+        <p class="note" id="storagestatus"></p>
         <button id="refreshadmin" style="width:100%;margin-top:8px">刷新管理面板</button>
       </div>
     </div>
@@ -237,6 +357,23 @@ pre{background:#10131a;border:1px solid var(--line);border-radius:8px;padding:10
   </aside>
 </main>
 <div id="backdrop"></div>
+<div id="wbfloat" aria-hidden="true">
+  <div class="wb-float-head" id="wbfloathead">
+    <h3>🧑‍💼 3D 工作台</h3>
+    <span class="wb-float-btns"><button id="wbreset" title="复位视角">↺ 视角</button><button id="wbmin" title="最小化">−</button><button id="wbclose" title="关闭">✕</button></span>
+  </div>
+  <div id="wbfloatbody">
+    <div id="wb3d"></div>
+    <div id="wbfloatsummary"></div>
+  </div>
+</div>
+<div id="abmodal" aria-hidden="true">
+  <div class="ab-modal-backdrop" id="abbackdrop"></div>
+  <div class="ab-modal">
+    <div class="ab-modal-head"><h3>🛡 Agent 审批看板</h3><button id="abclose">✕ 关闭</button></div>
+    <div id="abmodalbody"></div>
+  </div>
+</div>
 <script>
 const $=s=>document.querySelector(s);
 const api=location.origin;
@@ -301,7 +438,7 @@ async function loadRooms(){
   document.querySelector("#rooms button.active")?.scrollIntoView({inline:"center",block:"nearest"});
   const cur=rooms.find(x=>x.slug===room);$("#topic").textContent=cur?("# "+cur.name+" — "+(cur.topic||"")):"";
 }
-function switchRoom(slug){room=slug;msgs.clear();viewCleared=false;$("#msgs").innerHTML="";loadRooms();connect();}
+function switchRoom(slug){room=slug;msgs.clear();viewCleared=false;$("#msgs").innerHTML="";pendingAtts=[];renderAttachbar();loadRooms();connect();}
 function applyFilter(){
   document.querySelectorAll("#msgs .msg").forEach(el=>{
     const m=msgs.get(el.dataset.id);
@@ -342,14 +479,15 @@ function renderMsg(m){
     const d=evaluate(rules,m,me);
     hint=`<div class="hint ${d.should_reply?"yes":"no"}">${d.should_reply?"✅ 建议回":"⏸ 建议忽略"}：${esc(d.reason)}${d.should_reply?` <button data-act="reply">回它</button>`:""}</div>`;
   }
-  const quoted=m.reply_to&&msgs.get(m.reply_to)?`<div style="font-size:12px;color:var(--dim)">↩ ${esc(msgs.get(m.reply_to).sender_name)}：${esc(msgs.get(m.reply_to).text.slice(0,60))}</div>`:"";
+  const quoted=m.reply_to&&msgs.get(m.reply_to)?`<div style="font-size:12px;color:var(--dim)">↩ ${esc(msgs.get(m.reply_to).sender_name)}：${esc((msgs.get(m.reply_to).text||"").slice(0,60))}</div>`:"";
+  const bubbleHtml=(m.text||quoted)?`<div class="bubble">${quoted}${esc(m.text||"")}</div>`:"";
   el.innerHTML=`${avatarHtml(m)}<div style="min-width:0"><div class="meta">${esc(m.sender_name)}${badge(m.sender_type)}${platBadge(m.platform)} · ${time}
     <a href="#" data-act="at" style="margin-left:6px">@TA</a>
     <a href="#" data-act="re" style="margin-left:6px">回复</a>
     ${me&&m.sender_id===me.id?'<a href="#" data-act="del" style="margin-left:6px">撤回</a>':""}</div>
-    <div class="bubble">${quoted}${esc(m.text)}</div>${hint}</div>`;
+    ${bubbleHtml}${attachHtml(m)}${hint}</div>`;
   el.querySelector('[data-act="at"]').onclick=e=>{e.preventDefault();$("#input").value+=`@${m.sender_name} `;$("#input").focus();};
-  el.querySelector('[data-act="re"]').onclick=e=>{e.preventDefault();replyTo=m.id;$("#replybar").style.display="block";$("#replybar").textContent=`正在回复 ${m.sender_name}：${m.text.slice(0,50)} ✕ 点我取消`;$("#input").focus();};
+  el.querySelector('[data-act="re"]').onclick=e=>{e.preventDefault();replyTo=m.id;$("#replybar").style.display="block";$("#replybar").textContent=`正在回复 ${m.sender_name}：${(m.text||"").slice(0,50)} ✕ 点我取消`;$("#input").focus();};
   const del=el.querySelector('[data-act="del"]');if(del)del.onclick=async e=>{e.preventDefault();await sendDelete(m.id);};
   const rb=el.querySelector('[data-act="reply"]');if(rb)rb.onclick=()=>{replyTo=m.id;$("#input").value=`@${m.sender_name} `;$("#input").focus();};
   $("#msgs").appendChild(el);$("#msgs").scrollTop=$("#msgs").scrollHeight;applyFilter();
@@ -438,15 +576,83 @@ function startPoll(){if(pollTimer||!me)return;pollTimer=setInterval(async()=>{
   try{const r=await fetch(`${api}/api/rooms/${room}/messages?limit=50`,{headers:authHeaders()});const d=await r.json();
     (d.messages||[]).forEach(addMsg);if(d.members)renderMembers(d.members);}catch{}},2000);}
 function stopPoll(){clearInterval(pollTimer);pollTimer=null;}
+// ---- 文件上传（图片/文档/视频等，见 /api/files/*）----
+// 待发送附件：上传成功后才进 pendingAtts（done=true），发送时只带 done 的；
+// 上传中的不进发送，切换房间时清空（附件属于当前房间的输入）。
+let pendingAtts=[],attKey=0,fileEnabled=false,fileMaxMb=10,fileStatusLoaded=false;
+function fmtSize(n){
+  n=+n||0;
+  if(n<1024)return n+" B";
+  if(n<1024*1024)return (n/1024).toFixed(1)+" KB";
+  return (n/1048576).toFixed(1)+" MB";
+}
+function fileUrl(a){
+  const tok=(me&&me.token)||localStorage.getItem("muse_chatroom_token")||"";
+  return `${api}/api/files/${encodeURIComponent(a.id)}?token=${encodeURIComponent(tok)}`;
+}
+function attachHtml(m){
+  const atts=m.attachments||[];
+  if(!atts.length)return"";
+  return atts.map(a=>{
+    const url=fileUrl(a),name=esc(a.name||"文件"),sz=fmtSize(a.size);
+    const mime=String(a.mime||"").toLowerCase();
+    if(mime.startsWith("image/")&&mime!=="image/svg+xml")
+      return `<a href="${url}" target="_blank" rel="noopener"><img src="${url}" alt="${name}" loading="lazy" style="max-width:100%;border-radius:8px;display:block;margin-top:6px"></a>`;
+    if(mime.startsWith("video/"))
+      return `<video controls preload="metadata" src="${url}" style="max-width:100%;border-radius:8px;display:block;margin-top:6px"></video>`;
+    if(mime.startsWith("audio/"))
+      return `<audio controls preload="metadata" src="${url}" style="max-width:100%;margin-top:6px"></audio>`;
+    return `<div style="margin-top:6px"><a href="${url}" download="${name}">📄 ${name}（${sz}）</a></div>`;
+  }).join("");
+}
+function renderAttachbar(){
+  const bar=$("#attachbar");if(!bar)return;
+  if(!pendingAtts.length){bar.style.display="none";bar.innerHTML="";return;}
+  bar.style.display="flex";
+  bar.innerHTML=pendingAtts.map(a=>{
+    const cls=a.done?"":a.error?"err":"uploading";
+    const label=a.done?`${esc(a.name)}（${fmtSize(a.size)}）`:a.error?`${esc(a.name)}：上传失败（${esc(a.error)}）`:`${esc(a.name)}（上传中…）`;
+    return `<span class="attach-chip ${cls}"><span class="an">${label}</span><button type="button" data-rm="${a.key}" title="移除">✕</button></span>`;
+  }).join("");
+  bar.querySelectorAll("[data-rm]").forEach(b=>b.onclick=()=>{pendingAtts=pendingAtts.filter(x=>x.key!==+b.dataset.rm);renderAttachbar();});
+}
+async function uploadOne(file){
+  const item={key:++attKey,name:file.name,mime:file.type||"application/octet-stream",size:file.size,done:false,error:""};
+  if(fileStatusLoaded&&fileMaxMb&&file.size>fileMaxMb*1048576){
+    item.error=`超过单个文件上限（${fileMaxMb} MB）`;
+    pendingAtts.push(item);renderAttachbar();return;
+  }
+  pendingAtts.push(item);renderAttachbar();
+  const fd=new FormData();fd.append("file",file);fd.append("room",room);
+  try{
+    const r=await fetch(api+"/api/files/upload",{method:"POST",headers:{Authorization:"Bearer "+(me&&me.token||"")},body:fd});
+    const d=await r.json().catch(()=>({}));
+    if(!r.ok||!d.id){item.error=d.error||("上传失败（"+r.status+"）");renderAttachbar();return;}
+    Object.assign(item,{id:d.id,name:d.name||file.name,mime:d.mime||item.mime,size:d.size||file.size,done:true});
+  }catch(e){item.error="网络错误";}
+  renderAttachbar();
+}
+async function checkFileStatus(){
+  const btn=$("#attachbtn");if(!btn)return;
+  try{
+    const r=await fetch(api+"/api/files/status",{headers:authHeaders()});
+    const d=await r.json();
+    if(d.enabled){fileEnabled=true;fileMaxMb=d.max_file_mb||10;fileStatusLoaded=true;btn.disabled=false;btn.title="上传文件";}
+    else{fileEnabled=false;btn.disabled=true;btn.title="管理员还没配置存储";}
+  }catch{fileEnabled=false;btn.disabled=true;btn.title="文件上传暂不可用";}
+}
 async function sendMessage(){
-  const text=$("#input").value.trim();if(!text||!me){if(!me)alert("先用 Token 进入聊天室");return;}
+  const text=$("#input").value.trim();
+  const atts=pendingAtts.filter(a=>a.done).map(a=>({id:a.id,name:a.name,mime:a.mime,size:a.size}));
+  if((!text&&!atts.length)||!me){if(!me)alert("先用 Token 进入聊天室");return;}
   $("#input").value="";autogrow();
-  if(ws&&ws.readyState===1){ws.send(JSON.stringify({type:"message",text,reply_to:replyTo}));}
+  if(ws&&ws.readyState===1){ws.send(JSON.stringify({type:"message",text,reply_to:replyTo,attachments:atts}));}
   else{
     const r=await fetch(`${api}/api/rooms/${room}/messages`,{method:"POST",headers:authHeaders(),
-      body:JSON.stringify({text,reply_to:replyTo})});
+      body:JSON.stringify({text,reply_to:replyTo,attachments:atts})});
     const d=await r.json();if(d.message)addMsg(d.message);else if(d.error)alert(d.error);
   }
+  pendingAtts=pendingAtts.filter(a=>!a.done);renderAttachbar();
   replyTo=null;$("#replybar").style.display="none";
 }
 async function sendDelete(id){
@@ -454,6 +660,15 @@ async function sendDelete(id){
   msgs.delete(id);document.querySelector(`[data-id="${id}"]`)?.remove();
 }
 $("#send").onclick=sendMessage;
+$("#attachbtn").onclick=()=>{if(!fileEnabled){alert("管理员还没配置存储，上传不可用。");return;}$("#filepick").click();};
+$("#filepick").addEventListener("change",()=>{
+  const files=[...($("#filepick").files||[])];
+  $("#filepick").value="";
+  const left=5-pendingAtts.length;
+  if(left<=0){alert("一次最多 5 个附件，先发掉或移除一些再传。");return;}
+  if(files.length>left)alert(`一次最多 5 个附件，只传前 ${left} 个。`);
+  files.slice(0,left).forEach(f=>uploadOne(f));
+});
 $("#input").addEventListener("keydown",e=>{if(e.key==="Enter"&&(e.altKey||e.metaKey)){e.preventDefault();sendMessage();}});
 function autogrow(){const t=$("#input");t.style.height="auto";t.style.height=Math.min(t.scrollHeight,120)+"px";}
 $("#input").addEventListener("input",()=>{autogrow();if(ws&&ws.readyState===1)ws.send(JSON.stringify({type:"typing",typing:$("#input").value.length>0}));});
@@ -464,6 +679,391 @@ async function loadAgents(){
       return `<div>${TYPE_EMOJI[a.type]||"🤖"} ${esc(a.name)} ${badge(a.type)}${platBadge(a.platform)} · 最后活跃 ${last}</div>`;
     }).join(""):"还没有 Agent 进房。";
   }catch{$("#agentlist").textContent="加载失败。";}
+}
+// ---- 3D 工作台入口（小动态图 + 点开放大看任务板）----
+// 快照由同步任务每 5 分钟推到 /api/workbench/board；这里只读不写。
+// 任务 detail 可能含订阅链接等敏感内容，弹窗只显示标题、工位名、来源房消息 id，不显示 detail 全文。
+const STATION_NAMES={"UNIT-01":"Atlas（总控）","UNIT-02":"Marley","UNIT-03":"WorkBuddy 国内版","UNIT-04":"WorkBuddy 网页端","UNIT-05":"Gemini","UNIT-06":"Ren","UNIT-07":"Moderator（小管家）","UNIT-08":"Hark"};
+const STATION_IDS=["UNIT-01","UNIT-02","UNIT-03","UNIT-04","UNIT-05","UNIT-06","UNIT-07","UNIT-08"];
+let wbBoard=null,wbUpdatedAt=null;
+function wbStationName(id){return STATION_NAMES[id]||(id||"未分配");}
+function wbSourceId(detail){
+  const m=String(detail||"").match(/\[房消息\s+(m_[A-Za-z0-9]+)\]/);
+  return m?m[1]:null;
+}
+function wbCounts(board){
+  if(board&&board.stats&&typeof board.stats.waiting==="number")return{waiting:board.stats.waiting,in_progress:board.stats.in_progress,done:board.stats.done};
+  const t=(board&&board.tasks)||[];
+  return{waiting:t.filter(x=>x.status==="waiting").length,in_progress:t.filter(x=>x.status==="in_progress").length,done:t.filter(x=>x.status==="done").length};
+}
+function wbBusySet(board){
+  const s=new Set();
+  ((board&&board.tasks)||[]).forEach(t=>{if(t.status==="in_progress"&&t.station_id)s.add(t.station_id);});
+  return s;
+}
+function wbTimeStr(ts){
+  if(!ts)return"";
+  try{return new Date(ts).toLocaleString("zh-CN",{month:"2-digit",day:"2-digit",hour:"2-digit",minute:"2-digit"});}catch{return"";}
+}
+function renderWorkbenchEntry(){
+  const w=$("#wb-waiting"),p=$("#wb-progress"),d=$("#wb-done"),dots=$("#wbdots"),up=$("#wbupdated");
+  if(!w)return;
+  if(!wbBoard){
+    w.textContent="—";p.textContent="—";d.textContent="—";
+    dots.innerHTML=STATION_IDS.map(id=>`<span class="wb-dot unassigned" title="${esc(wbStationName(id))}"></span>`).join("");
+    up.textContent="暂无任务快照，稍后再看";
+    return;
+  }
+  const c=wbCounts(wbBoard),busy=wbBusySet(wbBoard);
+  w.textContent=c.waiting;p.textContent=c.in_progress;d.textContent=c.done;
+  dots.innerHTML=STATION_IDS.map(id=>`<span class="wb-dot ${busy.has(id)?"busy":""}" title="${esc(wbStationName(id))}：${busy.has(id)?"忙碌":"空闲"}"></span>`).join("");
+  up.textContent=wbUpdatedAt?("同步于 "+wbTimeStr(wbUpdatedAt)):"已同步";
+}
+// 工位坐标（与 3D 工作台空间一致：两排各 4 个，x=-5.1/-1.7/1.7/5.1，z=-2.7/1.5）
+const STATION_POS={"UNIT-01":[-5.1,1.5],"UNIT-02":[-1.7,1.5],"UNIT-03":[1.7,1.5],"UNIT-04":[5.1,1.5],"UNIT-05":[-5.1,-2.7],"UNIT-06":[-1.7,-2.7],"UNIT-07":[1.7,-2.7],"UNIT-08":[5.1,-2.7]};
+function renderWorkbenchFloat(){
+  const box=$("#wbfloatsummary");if(!box)return;
+  if(!wbBoard){
+    box.innerHTML=`<p style="color:var(--dim)">暂无任务快照，稍后再看。同步任务每 5 分钟把 3D 工作台的任务板推过来。</p>`;
+    return;
+  }
+  const c=wbCounts(wbBoard),busy=wbBusySet(wbBoard);
+  const tasks=wbBoard.tasks||[];
+  const groups=[["waiting","待认领"],["in_progress","进行中"],["done","已完成"]];
+  const groupHtml=groups.map(([st,label])=>{
+    const list=tasks.filter(t=>t.status===st);
+    if(!list.length)return `<div class="wb-group"><h4>${label}（0）</h4><div class="wb-empty">没有任务</div></div>`;
+    return `<div class="wb-group"><h4>${label}（${list.length}）</h4>`+list.map(t=>{
+      const src=wbSourceId(t.detail);
+      return `<div class="wb-task" data-station="${esc(t.station_id||"")}" data-task="${t.id}"><div>${esc(t.title||"")}</div><div class="wb-meta">${esc(wbStationName(t.station_id))}${src?` · 来源房消息 ${esc(src)}`:""} · 点我定位工位</div></div>`;
+    }).join("")+`</div>`;
+  }).join("");
+  box.innerHTML=`
+    <div class="wb-stats"><span>待认领 <b>${c.waiting}</b></span><span>进行中 <b>${c.in_progress}</b></span><span>已完成 <b>${c.done}</b></span><span>忙碌工位 <b>${busy.size}/8</b></span><span>${wbUpdatedAt?("同步于 "+wbTimeStr(wbUpdatedAt)):""}</span></div>
+    <div class="wb-stations">${STATION_IDS.map(id=>`<span class="wb-station ${busy.has(id)?"busy":""}">${esc(wbStationName(id))} · ${busy.has(id)?"忙碌":"空闲"}</span>`).join("")}</div>
+    ${groupHtml}`;
+  box.querySelectorAll(".wb-task").forEach(el=>{
+    el.onclick=()=>{const st=el.getAttribute("data-station");if(st)wbFocusStation(st,el);};
+  });
+}
+function openWorkbenchFloat(){
+  const f=$("#wbfloat");if(!f)return;
+  renderWorkbenchFloat();
+  f.classList.add("open");f.classList.remove("minimized");f.setAttribute("aria-hidden","false");
+  initWorkbench3D();
+  if(wb3d&&wb3d.resize)wb3d.resize();
+}
+function closeWorkbenchFloat(){const f=$("#wbfloat");if(!f)return;f.classList.remove("open");f.setAttribute("aria-hidden","true");}
+function minimizeWorkbenchFloat(){const f=$("#wbfloat");if(!f)return;f.classList.add("minimized");}
+function toggleWorkbenchFloat(){
+  const f=$("#wbfloat");if(!f)return;
+  if(f.classList.contains("open")&&!f.classList.contains("minimized")){closeWorkbenchFloat();}
+  else{openWorkbenchFloat();}
+}
+async function loadWorkbenchBoard(){
+  if(!me||!me.token)return;
+  try{
+    const r=await fetch(api+"/api/workbench/board",{headers:authHeaders()});
+    const d=await r.json();
+    if(d.error)return;
+    wbBoard=d.board||null;wbUpdatedAt=d.updated_at||null;
+    renderWorkbenchEntry();
+    updateWorkbenchLights();
+    if(document.getElementById("wbfloat").classList.contains("open"))renderWorkbenchFloat();
+  }catch{}
+}
+// ---- 3D 工作台场景（轻量版办公室，Three.js CDN）----
+let wb3d=null;
+function initWorkbench3D(){
+  if(wb3d)return;
+  const host=$("#wb3d");if(!host)return;
+  if(typeof THREE==="undefined"){
+    host.innerHTML=`<div id="wb3dfallback">3D 未加载（Three.js CDN 不可用），任务列表见下方。</div>`;
+    return;
+  }
+  const W=host.clientWidth||520,H=host.clientHeight||300;
+  const renderer=new THREE.WebGLRenderer({antialias:true});
+  renderer.setPixelRatio(Math.min(window.devicePixelRatio||1,2));
+  renderer.setSize(W,H);
+  host.appendChild(renderer.domElement);
+  const scene=new THREE.Scene();
+  scene.background=new THREE.Color(0x11141a);
+  scene.fog=new THREE.Fog(0x11141a,22,40);
+  const camera=new THREE.PerspectiveCamera(50,W/H,0.1,100);
+  scene.add(new THREE.AmbientLight(0xffffff,0.75));
+  const dl=new THREE.DirectionalLight(0xffffff,1.1);
+  dl.position.set(6,10,8);
+  scene.add(dl);
+  // 地面：19×15 米奶油色
+  const floor=new THREE.Mesh(new THREE.PlaneGeometry(19,15),new THREE.MeshStandardMaterial({color:0xf2ead8,roughness:0.9}));
+  floor.rotation.x=-Math.PI/2;scene.add(floor);
+  // 玻璃墙（深绿框）：后墙 + 两侧
+  const glassMat=new THREE.MeshStandardMaterial({color:0x9fc4d8,transparent:true,opacity:0.18,roughness:0.2,metalness:0.1,side:THREE.DoubleSide});
+  const frameMat=new THREE.MeshStandardMaterial({color:0x1e4d3b,roughness:0.6});
+  function glassWall(w,h,x,z,ry){
+    const g=new THREE.Group();
+    const pane=new THREE.Mesh(new THREE.PlaneGeometry(w,h),glassMat);
+    pane.position.y=h/2;g.add(pane);
+    const t=0.12;
+    const top=new THREE.Mesh(new THREE.BoxGeometry(w+t,t,t),frameMat);top.position.y=h;g.add(top);
+    const bottom=new THREE.Mesh(new THREE.BoxGeometry(w+t,t,t),frameMat);bottom.position.y=0;g.add(bottom);
+    const left=new THREE.Mesh(new THREE.BoxGeometry(t,h,t),frameMat);left.position.set(-w/2,h/2,0);g.add(left);
+    const right=new THREE.Mesh(new THREE.BoxGeometry(t,h,t),frameMat);right.position.set(w/2,h/2,0);g.add(right);
+    const mid=new THREE.Mesh(new THREE.BoxGeometry(t,h,t),frameMat);mid.position.set(0,h/2,0);g.add(mid);
+    g.position.set(x,0,z);g.rotation.y=ry;scene.add(g);
+  }
+  glassWall(19,3.2,0,-7.5,0);
+  glassWall(15,3.2,-9.5,0,Math.PI/2);
+  glassWall(15,3.2,9.5,0,Math.PI/2);
+  // 工位
+  const deskMat=new THREE.MeshStandardMaterial({color:0x8a6f4d,roughness:0.7});
+  const darkMat=new THREE.MeshStandardMaterial({color:0x232830,roughness:0.4});
+  const screenMat=new THREE.MeshStandardMaterial({color:0x1a2a3a,roughness:0.2,metalness:0.4,emissive:0x0a1a2a});
+  const lights={};
+  function nameTexture(text){
+    const cv=document.createElement("canvas");cv.width=256;cv.height=64;
+    const ctx=cv.getContext("2d");
+    ctx.fillStyle="#1e222d";ctx.fillRect(0,0,256,64);
+    ctx.fillStyle="#e8eaf0";ctx.font="bold 26px sans-serif";ctx.textAlign="center";ctx.textBaseline="middle";
+    ctx.fillText(text,128,34);
+    const tex=new THREE.CanvasTexture(cv);tex.anisotropy=4;return tex;
+  }
+  const SHORT={"UNIT-01":"Atlas","UNIT-02":"Marley","UNIT-03":"WB·国内","UNIT-04":"WB·网页","UNIT-05":"Gemini","UNIT-06":"Ren","UNIT-07":"小管家","UNIT-08":"Hark"};
+  for(const id of STATION_IDS){
+    const pos=STATION_POS[id];if(!pos)continue;
+    const g=new THREE.Group();
+    const desk=new THREE.Mesh(new THREE.BoxGeometry(1.5,0.08,0.8),deskMat);desk.position.y=0.74;g.add(desk);
+    const legL=new THREE.Mesh(new THREE.BoxGeometry(0.08,0.74,0.7),darkMat);legL.position.set(-0.65,0.37,0);g.add(legL);
+    const legR=legL.clone();legR.position.x=0.65;g.add(legR);
+    const mon=new THREE.Mesh(new THREE.BoxGeometry(0.62,0.4,0.05),screenMat);mon.position.set(0,1.05,-0.18);g.add(mon);
+    const stand=new THREE.Mesh(new THREE.BoxGeometry(0.08,0.28,0.08),darkMat);stand.position.set(0,0.9,-0.18);g.add(stand);
+    const chair=new THREE.Mesh(new THREE.BoxGeometry(0.5,0.5,0.5),new THREE.MeshStandardMaterial({color:0x3a4a5a,roughness:0.8}));chair.position.set(0,0.25,0.75);g.add(chair);
+    const chairBack=new THREE.Mesh(new THREE.BoxGeometry(0.5,0.55,0.08),chair.material);chairBack.position.set(0,0.75,0.98);g.add(chairBack);
+    const plate=new THREE.Mesh(new THREE.PlaneGeometry(1.1,0.28),new THREE.MeshBasicMaterial({map:nameTexture(SHORT[id]||id)}));
+    plate.position.set(0,1.55,-0.1);g.add(plate);
+    const lamp=new THREE.Mesh(new THREE.SphereGeometry(0.09,16,12),new THREE.MeshStandardMaterial({color:0x3ecf8e,emissive:0x3ecf8e,emissiveIntensity:0.9}));
+    lamp.position.set(0.62,0.95,-0.1);g.add(lamp);
+    const pole=new THREE.Mesh(new THREE.CylinderGeometry(0.02,0.02,0.18,8),darkMat);pole.position.set(0.62,0.86,-0.1);g.add(pole);
+    lights[id]=lamp;
+    g.position.set(pos[0],0,pos[1]);
+    scene.add(g);
+  }
+  // 会议区（前左）+ 零食区（前右）
+  const tableMat=new THREE.MeshStandardMaterial({color:0x6b5a44,roughness:0.7});
+  const mTable=new THREE.Mesh(new THREE.CylinderGeometry(1.1,1.1,0.08,24),tableMat);mTable.position.set(-6.2,0.74,4.6);scene.add(mTable);
+  const mBase=new THREE.Mesh(new THREE.CylinderGeometry(0.12,0.5,0.74,12),darkMat);mBase.position.set(-6.2,0.37,4.6);scene.add(mBase);
+  for(let i=0;i<4;i++){
+    const a=i*Math.PI/2+Math.PI/4;
+    const ch=new THREE.Mesh(new THREE.BoxGeometry(0.45,0.5,0.45),new THREE.MeshStandardMaterial({color:0x4a5a6a,roughness:0.8}));
+    ch.position.set(-6.2+Math.cos(a)*1.6,0.25,4.6+Math.sin(a)*1.6);scene.add(ch);
+  }
+  const counter=new THREE.Mesh(new THREE.BoxGeometry(2.2,0.9,0.7),new THREE.MeshStandardMaterial({color:0x7a6a55,roughness:0.7}));counter.position.set(6.2,0.45,4.6);scene.add(counter);
+  const shelf=new THREE.Mesh(new THREE.BoxGeometry(2.0,0.08,0.5),deskMat);shelf.position.set(6.2,1.5,4.6);scene.add(shelf);
+  // 6 棵球形绿植
+  const leafMat=new THREE.MeshStandardMaterial({color:0x3f8f4f,roughness:0.9});
+  const trunkMat=new THREE.MeshStandardMaterial({color:0x5a4632,roughness:0.9});
+  const plantPos=[[-8.6,-6.8],[0,-6.8],[8.6,-6.8],[-8.6,6.8],[8.6,6.8],[0,6.8]];
+  for(const p of plantPos){
+    const pot=new THREE.Mesh(new THREE.CylinderGeometry(0.28,0.22,0.4,12),new THREE.MeshStandardMaterial({color:0x8a5a3b,roughness:0.8}));pot.position.set(p[0],0.2,p[1]);scene.add(pot);
+    const trunk=new THREE.Mesh(new THREE.CylinderGeometry(0.05,0.05,0.7,8),trunkMat);trunk.position.set(p[0],0.7,p[1]);scene.add(trunk);
+    const ball=new THREE.Mesh(new THREE.SphereGeometry(0.55,20,16),leafMat);ball.position.set(p[0],1.45,p[1]);scene.add(ball);
+  }
+  // 相机轨道（自定义球面相机，缓慢自转 + 拖拽）
+  const orbit={target:new THREE.Vector3(0,0.8,-0.5),theta:0.5,phi:1.15,radius:14,auto:true};
+  function applyCamera(){
+    const sp=Math.sin(orbit.phi),cp=Math.cos(orbit.phi);
+    camera.position.set(
+      orbit.target.x+orbit.radius*sp*Math.sin(orbit.theta),
+      orbit.target.y+orbit.radius*cp,
+      orbit.target.z+orbit.radius*sp*Math.cos(orbit.theta)
+    );
+    camera.lookAt(orbit.target);
+  }
+  applyCamera();
+  let dragging=false,px=0,py=0;
+  const el=renderer.domElement;
+  el.style.touchAction="none";
+  el.addEventListener("pointerdown",e=>{dragging=true;px=e.clientX;py=e.clientY;orbit.auto=false;el.setPointerCapture(e.pointerId);});
+  el.addEventListener("pointermove",e=>{
+    if(!dragging)return;
+    const dx=e.clientX-px,dy=e.clientY-py;px=e.clientX;py=e.clientY;
+    orbit.theta-=dx*0.005;orbit.phi=Math.max(0.35,Math.min(1.35,orbit.phi-dy*0.005));
+    applyCamera();
+  });
+  const endDrag=()=>{dragging=false;};
+  el.addEventListener("pointerup",endDrag);
+  el.addEventListener("pointercancel",endDrag);
+  el.addEventListener("wheel",e=>{e.preventDefault();orbit.radius=Math.max(7,Math.min(20,orbit.radius+e.deltaY*0.01));applyCamera();},{passive:false});
+  function resize(){
+    const w=host.clientWidth||520,h=host.clientHeight||300;
+    renderer.setSize(w,h);camera.aspect=w/h;camera.updateProjectionMatrix();
+  }
+  window.addEventListener("resize",resize);
+  let last=performance.now();
+  function tick(now){
+    if(!document.getElementById("wbfloat").classList.contains("open")){wb3d.raf=requestAnimationFrame(tick);return;}
+    const dt=Math.min(0.05,(now-last)/1000);last=now;
+    if(orbit.auto&&!dragging){orbit.theta+=dt*0.05;applyCamera();}
+    renderer.render(scene,camera);
+    wb3d.raf=requestAnimationFrame(tick);
+  }
+  wb3d={renderer,scene,camera,lights,orbit,applyCamera,raf:0,resize};
+  wb3d.resetView=()=>{orbit.target.set(0,0.8,-0.5);orbit.theta=0.5;orbit.phi=1.15;orbit.radius=14;orbit.auto=true;applyCamera();};
+  updateWorkbenchLights();
+  wb3d.raf=requestAnimationFrame(tick);
+}
+function updateWorkbenchLights(){
+  if(!wb3d)return;
+  const busy=wbBusySet(wbBoard);
+  for(const id of STATION_IDS){
+    const lamp=wb3d.lights[id];if(!lamp)continue;
+    const isBusy=busy.has(id);
+    lamp.material.color.set(isBusy?0xffb74d:0x3ecf8e);
+    lamp.material.emissive.set(isBusy?0xffb74d:0x3ecf8e);
+  }
+}
+function wbFocusStation(stationId,el){
+  if(!wb3d)return;
+  const pos=STATION_POS[stationId];if(!pos)return;
+  wb3d.orbit.target.set(pos[0],1.0,pos[1]);
+  wb3d.orbit.radius=7;wb3d.orbit.auto=false;wb3d.applyCamera();
+  if(el){el.classList.add("focused");setTimeout(()=>el.classList.remove("focused"),1200);}
+}
+// 悬浮窗拖动（标题栏拖动，位置记内存，不持久化）
+function initWorkbenchFloatDrag(){
+  const f=$("#wbfloat"),head=$("#wbfloathead");
+  if(!f||!head)return;
+  let sx=0,sy=0,ox=0,oy=0,drag=false;
+  head.addEventListener("pointerdown",e=>{
+    if(e.target.closest("button"))return;
+    drag=true;sx=e.clientX;sy=e.clientY;
+    const r=f.getBoundingClientRect();ox=r.left;oy=r.top;
+    head.setPointerCapture(e.pointerId);
+  });
+  head.addEventListener("pointermove",e=>{
+    if(!drag)return;
+    let nx=ox+(e.clientX-sx),ny=oy+(e.clientY-sy);
+    nx=Math.max(0,Math.min(window.innerWidth-f.offsetWidth,nx));
+    ny=Math.max(0,Math.min(window.innerHeight-60,ny));
+    f.style.left=nx+"px";f.style.top=ny+"px";f.style.right="auto";
+  });
+  const end=()=>{drag=false;};
+  head.addEventListener("pointerup",end);
+  head.addEventListener("pointercancel",end);
+}
+// ---- Agent 审批看板入口（小动态图 + 点开放大看完整看板）----
+// 快照由同步任务每 5 分钟推到 /api/approval-board；这里只读不写。
+// 审批在主聊卡片上点，房里只看不批。
+let abBoard=null,abUpdatedAt=null;
+function abIsChoice(item){
+  if(!item)return false;
+  if(item.status==="choice"||item.kind==="choice"||item.type==="choice")return true;
+  if(Array.isArray(item.options)&&item.options.length)return true;
+  return false;
+}
+function abStatusLabel(item){
+  if(!item)return"待处理";
+  const s=String(item.status||"");
+  if(s==="choice"||abIsChoice(item))return"待选择";
+  if(s==="pending")return"待审批";
+  if(s==="approved")return"已通过";
+  if(s==="rejected")return"已拒绝";
+  if(s==="resolved")return"已处理";
+  return"待处理";
+}
+function abRiskLabel(r){
+  const x=String(r||"").toLowerCase();
+  if(x==="high")return"高";
+  if(x==="medium")return"中";
+  if(x==="low")return"低";
+  return r||"—";
+}
+function abRiskClass(r){
+  const x=String(r||"").toLowerCase();
+  if(x==="high")return"ab-risk-high";
+  if(x==="medium")return"ab-risk-medium";
+  return"ab-risk-low";
+}
+function abDeadline(item){
+  return item.expiresAt||item.expires_at||item.deadline||item.dueAt||item.due_at||null;
+}
+function abCounts(board){
+  const pending=(board&&board.pending)||[];
+  const history=(board&&board.history)||[];
+  let choice=0,approval=0;
+  pending.forEach(it=>{if(abIsChoice(it))choice++;else approval++;});
+  const high=(board&&typeof board.highRiskCount==="number")?board.highRiskCount:pending.concat(history).filter(x=>String(x.riskLevel||x.risk_level||"").toLowerCase()==="high").length;
+  return{approval,choice,resolved:history.length,high,pendingTotal:pending.length};
+}
+function renderApprovalEntry(){
+  const p=$("#ab-pending"),c=$("#ab-choice"),r=$("#ab-resolved"),pulse=$("#abpulse"),up=$("#abupdated");
+  if(!p)return;
+  if(!abBoard){
+    p.textContent="—";c.textContent="—";r.textContent="—";
+    pulse.classList.remove("on");
+    up.textContent="暂无审批快照，稍后再看";
+    return;
+  }
+  const n=abCounts(abBoard);
+  p.textContent=n.approval;c.textContent=n.choice;r.textContent=n.resolved;
+  pulse.classList.toggle("on",n.pendingTotal>0);
+  document.getElementById("abentry").classList.toggle("has-pending",n.pendingTotal>0);
+  up.textContent=abUpdatedAt?("同步于 "+wbTimeStr(abUpdatedAt)):"已同步";
+}
+function abItemHtml(it){
+  const src=wbSourceId(it.detail);
+  const dl=abDeadline(it);
+  const opts=Array.isArray(it.options)?it.options:null;
+  const risk=it.riskLevel||it.risk_level||"";
+  const metaParts=[
+    "申请人："+esc(it.requester||"—"),
+    "申请于 "+wbTimeStr(it.requestedAt||it.requested_at||""),
+    dl?("截止 "+wbTimeStr(dl)):"",
+    "风险 <span class='"+abRiskClass(risk)+"'>"+esc(abRiskLabel(risk))+"</span>",
+    src?("来源房消息 "+esc(src)):"",
+    it.code?("编号 "+esc(String(it.code).slice(0,13)+"…")):"",
+  ].filter(Boolean);
+  const optHtml=opts?`<div class="ab-detail">选项：${opts.map(o=>esc(typeof o==="string"?o:(o.label||o.title||JSON.stringify(o)))).join(" / ")}</div>`:"";
+  return `<div class="ab-item"><div><b>${esc(it.title||"")}</b> <span class="ab-meta">（${esc(abStatusLabel(it))}）</span></div>
+    <div class="ab-meta">影响：${esc(it.permission||it.permission_scope||"—")}</div>
+    ${it.detail?`<div class="ab-detail">${esc(it.detail)}</div>`:""}
+    ${optHtml}
+    <div class="ab-meta">${metaParts.join(" · ")}</div></div>`;
+}
+function renderApprovalModal(){
+  const body=$("#abmodalbody");if(!body)return;
+  if(!abBoard){
+    body.innerHTML=`<p style="color:var(--dim)">暂无审批快照，稍后再看。同步任务每 5 分钟把 Agent 审批看板的收件箱推过来。审批在主聊卡片上点，房里只看不批。</p>`;
+    return;
+  }
+  const n=abCounts(abBoard);
+  const pending=abBoard.pending||[];
+  const history=abBoard.history||[];
+  const pendHtml=pending.length?pending.map(abItemHtml).join(""):`<div class="ab-empty">没有待处理事项。</div>`;
+  const histHtml=history.length?history.map(it=>{
+    const risk=it.riskLevel||it.risk_level||"";
+    return `<div class="ab-item"><div><b>${esc(it.title||"")}</b> <span class="ab-meta">（${esc(abStatusLabel(it))}）</span></div>
+      <div class="ab-meta">影响：${esc(it.permission||it.permission_scope||"—")}</div>
+      <div class="ab-meta">申请人：${esc(it.requester||"—")} · 申请于 ${wbTimeStr(it.requestedAt||it.requested_at||"")} · 处理于 ${wbTimeStr(it.resolvedAt||it.resolved_at||"")} · 风险 <span class="${abRiskClass(risk)}">${esc(abRiskLabel(risk))}</span></div></div>`;
+  }).join(""):`<div class="ab-empty">还没有已处理记录。</div>`;
+  body.innerHTML=`
+    <div class="ab-stats"><span>待审批 <b>${n.approval}</b></span><span>待选择 <b>${n.choice}</b></span><span>已处理 <b>${n.resolved}</b></span><span>高风险 <b>${n.high}</b></span><span>${abUpdatedAt?("同步于 "+wbTimeStr(abUpdatedAt)):""}</span></div>
+    <p class="note">审批在主聊卡片上点，房里只看不批。</p>
+    <div class="ab-group"><h4>待处理（${n.pendingTotal}）</h4>${pendHtml}</div>
+    <div class="ab-group"><h4>已处理历史（${n.resolved}）</h4>${histHtml}</div>`;
+}
+function openApprovalModal(){renderApprovalModal();const m=$("#abmodal");m.classList.add("open");m.setAttribute("aria-hidden","false");}
+function closeApprovalModal(){const m=$("#abmodal");m.classList.remove("open");m.setAttribute("aria-hidden","true");}
+async function loadApprovalBoard(){
+  if(!me||!me.token)return;
+  try{
+    const r=await fetch(api+"/api/approval-board",{headers:authHeaders()});
+    const d=await r.json();
+    if(d.error)return;
+    abBoard=d.board||null;abUpdatedAt=d.updated_at||null;
+    renderApprovalEntry();
+    if(document.getElementById("abmodal").classList.contains("open"))renderApprovalModal();
+  }catch{}
 }
 async function loadAdmin(){
   if(!me||(me.role!=="owner"&&me.role!=="moderator"))return;
@@ -536,8 +1136,74 @@ async function loadAdmin(){
       document.querySelectorAll("#wechatbindlist [data-rebind]").forEach(b=>b.onclick=()=>showWechatBindCard(null,b.dataset.rebind));
       await loadBridges();
     }
+    loadStorageConfig();
   }catch(e){/* 管理面板加载失败不影响聊天 */}
 }
+// ---- 文件存储配置（仅房主，见 /api/admin/storage）----
+// 密钥占位串：后端返回 "••••••••" 表示已设置；原样传回即保持原值不变。
+const STORAGE_SECRET_PLACEHOLDER="••••••••";
+function storageShowFields(){
+  const p=$("#storageprovider").value;
+  $("#storager2").style.display=p==="r2"?"block":"none";
+  $("#storages3").style.display=p==="s3"?"block":"none";
+  $("#storagewebdav").style.display=p==="webdav"?"block":"none";
+}
+function storageReadForm(){
+  return{
+    provider:$("#storageprovider").value,
+    max_file_mb:Math.max(1,Math.min(50,parseInt($("#storagemaxmb").value||"10",10)||10)),
+    s3:{endpoint:$("#s3endpoint").value.trim(),region:$("#s3region").value.trim(),bucket:$("#s3bucket").value.trim(),access_key_id:$("#s3keyid").value.trim(),secret_access_key:$("#s3secret").value},
+    webdav:{url:$("#davurl").value.trim(),username:$("#davuser").value.trim(),password:$("#davpass").value},
+  };
+}
+function storageFillForm(cfg){
+  if(!cfg)return;
+  $("#storageprovider").value=cfg.provider||"none";
+  $("#storagemaxmb").value=cfg.max_file_mb||10;
+  const s=cfg.s3||{};
+  $("#s3endpoint").value=s.endpoint||"";$("#s3region").value=s.region||"";$("#s3bucket").value=s.bucket||"";
+  $("#s3keyid").value=s.access_key_id||"";$("#s3secret").value=s.secret_access_key||"";
+  const w=cfg.webdav||{};
+  $("#davurl").value=w.url||"";$("#davuser").value=w.username||"";$("#davpass").value=w.password||"";
+  storageShowFields();
+}
+async function loadStorageConfig(){
+  const st=$("#storagestatus");if(!st)return;
+  if(!me||me.role!=="owner"){
+    st.textContent="文件存储仅房主可配置。";
+    ["storageprovider","s3endpoint","s3region","s3bucket","s3keyid","s3secret","davurl","davuser","davpass","storagemaxmb","storagetest","storagesave"].forEach(id=>{const el=document.getElementById(id);if(el)el.disabled=true;});
+    return;
+  }
+  try{
+    const r=await fetch(api+"/api/admin/storage",{headers:authHeaders()});
+    const d=await r.json();
+    if(d.error){st.textContent="读取配置失败："+d.error;return;}
+    storageFillForm(d);
+    st.textContent=d.provider&&d.provider!=="none"?`当前存储：${d.provider}，单个文件上限 ${d.max_file_mb||10} MB。`:"当前未配置存储，上传功能关闭。";
+  }catch{st.textContent="读取配置失败：网络错误。";}
+}
+$("#storageprovider").addEventListener("change",storageShowFields);
+$("#storagetest").onclick=async()=>{
+  const st=$("#storagestatus");st.textContent="测试中…";
+  try{
+    const r=await fetch(api+"/api/admin/storage/test",{method:"POST",headers:authHeaders(),body:JSON.stringify(storageReadForm())});
+    const d=await r.json();
+    if(d.error){st.textContent="测试失败："+d.error;return;}
+    st.textContent=`测试通过（${d.provider||"—"}）：${d.detail||"存取删都正常"}`;
+  }catch{st.textContent="测试失败：网络错误。";}
+};
+$("#storagesave").onclick=async()=>{
+  const st=$("#storagestatus");st.textContent="保存中…";
+  try{
+    const cfg=storageReadForm();
+    const r=await fetch(api+"/api/admin/storage",{method:"PUT",headers:authHeaders(),body:JSON.stringify(cfg)});
+    const d=await r.json();
+    if(d.error){st.textContent="保存失败："+d.error;return;}
+    st.textContent=`已保存：${d.provider||cfg.provider}，单个文件上限 ${d.max_file_mb||cfg.max_file_mb} MB。`;
+    checkFileStatus();
+    loadStorageConfig();
+  }catch{st.textContent="保存失败：网络错误。";}
+};
 $("#refreshadmin").onclick=loadAdmin;
 async function joinWithToken(token){
   const r=await fetch(api+"/api/identities/me",{headers:{"content-type":"application/json",Authorization:"Bearer "+token}});
@@ -562,7 +1228,7 @@ async function joinWithToken(token){
   if(me.role==="owner"||me.role==="moderator"){$("#admin").style.display="block";loadAdmin();}
   if(me.role==="owner")$("#roomcreate").style.display="block";
   if(me.role!=="owner"){$("#mybridge").style.display="block";loadMyBridge();}
-  updateWhoami();updateApiCode();connect();loadAgents();
+  updateWhoami();updateApiCode();connect();loadAgents();loadWorkbenchBoard();loadApprovalBoard();checkFileStatus();
   return true;
 }
 $("#join").onclick=async()=>{
@@ -770,6 +1436,17 @@ curl -X POST ${api}/api/evaluate \\
   syncRulesUI();updateApiCode();updateWhoami();loadRooms();loadAgents();connect();
   if(saved)joinWithToken(saved); // 已存 Token：自动加入，手机回访不用再点进抽屉
   if(matchMedia("(max-width:900px)").matches)$("#input").placeholder="输入消息，@名字 提及某人…";
+  $("#wbentry").onclick=toggleWorkbenchFloat;
+  $("#wbclose").onclick=closeWorkbenchFloat;
+  $("#wbmin").onclick=minimizeWorkbenchFloat;
+  $("#wbreset").onclick=()=>{if(wb3d&&wb3d.resetView)wb3d.resetView();};
+  initWorkbenchFloatDrag();
+  openWorkbenchFloat();
+  $("#abentry").onclick=openApprovalModal;
+  $("#abclose").onclick=closeApprovalModal;
+  $("#abbackdrop").onclick=closeApprovalModal;
+  document.addEventListener("keydown",e=>{if(e.key==="Escape"){closeWorkbenchFloat();closeApprovalModal();}});
+  setInterval(()=>{loadWorkbenchBoard();loadApprovalBoard();},60000);
 })();
 // 手机：抽屉与成员开关
 $("#menubtn").onclick=()=>document.body.classList.add("panel-open");

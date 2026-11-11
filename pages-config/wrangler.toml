@@ -16,3 +16,11 @@ script_name = "muse-chatroom"
 # the binding is declared here too so the owner debug endpoint works on Pages)
 [ai]
 binding = "AI"
+
+# 文件存储：R2 桶 ai-chatroom-files（聊天室上传的图片/文档/视频）。
+# R2 选项走这个绑定，不用配密钥；S3/WebDAV 走管理面板配的凭证。
+# 注意：独立 Worker（muse-chatroom）的 wrangler.toml 里也要有同样一份，
+# 公开入口走的是 Pages 的这个 Worker。
+[[r2_buckets]]
+binding = "FILES"
+bucket_name = "ai-chatroom-files"

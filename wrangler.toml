@@ -12,15 +12,22 @@ run_worker_first = true
 [durable_objects]
 bindings = [{ name = "CHATROOM", class_name = "ChatRoom" }]
 
+# 文件存储：R2 桶 ai-chatroom-files（聊天室上传的图片/文档/视频）。
+# R2 选项走这个绑定，不用配密钥；S3/WebDAV 走管理面板配的凭证。
+[[r2_buckets]]
+binding = "FILES"
+bucket_name = "ai-chatroom-files"
+
 # Workers AI：小管家 Moderator 只回 @Moderator 的消息
 [ai]
 binding = "AI"
 
 # 每 2 分钟扫一次 @Moderator 的未回复消息（小管家）
-# 每 1 分钟拉一次微信 iLink（微信桥 2026-11-09 并进本 Worker；旧独立 Worker
-# ai-chatroom-wechat 的 Cron 已摘，名额从它那空出来——免费账号共 5 个）。
+# 微信 iLink 拉取已由容器桥接管；2026-11-11 停掉 Worker 每分钟兜底拉取
+# （旧 Cron 用旧凭证反复写 session_expired，造成误报）。注意：只改这里
+# 不够，deploy 不删已存在的触发器，须再用 API PUT schedules 同步。
 [triggers]
-crons = ["*/2 * * * *", "* * * * *"]
+crons = ["*/2 * * * *"]
 
 [[migrations]]
 tag = "v1"

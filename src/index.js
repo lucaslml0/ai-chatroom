@@ -123,6 +123,22 @@ function sanitizeRules(input) {
   if (Number.isFinite(+input.cooldown_seconds)) r.cooldown_seconds = Math.max(0, Math.min(3600, Math.floor(+input.cooldown_seconds)));
   return r;
 }
+// 附件元数据清洗：只认客户端上传接口返回过的那几项（id/name/mime/size），
+// 最多 5 个；下载是否真实存在以 files 表为准，这里只做形状校验。
+function sanitizeAttachments(input) {
+  if (!Array.isArray(input)) return [];
+  const out = [];
+  for (const a of input.slice(0, 5)) {
+    if (!a || typeof a !== "object") continue;
+    const id = String(a.id || "").slice(0, 40);
+    const name = String(a.name || "").slice(0, 200);
+    const mime = String(a.mime || "").slice(0, 100);
+    const size = Math.floor(+a.size || 0);
+    if (!id || !name || size < 0) continue;
+    out.push({ id, name, mime, size });
+  }
+  return out;
+}
 async function sha12(s) {
   const buf = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(s));
   return [...new Uint8Array(buf)].map((x) => x.toString(16).padStart(2, "0")).join("").slice(0, 12);
@@ -158,6 +174,8 @@ export class ChatRoom {
         created INTEGER, status TEXT DEFAULT 'pending')`);
       sql.exec(`CREATE TABLE IF NOT EXISTS wechat_bindings(
         wechat_id TEXT PRIMARY KEY, identity_id TEXT, wechat_name TEXT, bound_at INTEGER)`);
+      sql.exec(`CREATE TABLE IF NOT EXISTS bridge_owners(
+        owner_id TEXT PRIMARY KEY, bridge_id TEXT, bridge_token TEXT, created INTEGER)`);
       sql.exec(`CREATE TABLE IF NOT EXISTS wechat_bind_codes(
         code TEXT PRIMARY KEY, identity_id TEXT, created INTEGER, expires_at INTEGER, used INTEGER DEFAULT 0)`);
       // 微信桥状态（2026-11-09 并进聊天室服务；旧独立 Worker 的 WeChatBridge
@@ -165,6 +183,11 @@ export class ChatRoom {
       sql.exec(`CREATE TABLE IF NOT EXISTS wechat_kv(key TEXT PRIMARY KEY, value TEXT)`);
       sql.exec(`CREATE TABLE IF NOT EXISTS wechat_contexts(wechat_id TEXT PRIMARY KEY, context_token TEXT, updated_at INTEGER)`);
       sql.exec(`CREATE TABLE IF NOT EXISTS wechat_commands(id TEXT PRIMARY KEY, wechat_id TEXT, text TEXT, status TEXT DEFAULT 'pending', created_at INTEGER, replied_at INTEGER)`);
+      // 文件存储：上传的文件只记元数据，字节存在外部存储（R2/S3/WebDAV）。
+      // object_key 是外部存储里的键；下载时按 id 查这条记录再去外部取字节。
+      sql.exec(`CREATE TABLE IF NOT EXISTS files(
+        id TEXT PRIMARY KEY, room TEXT, object_key TEXT, name TEXT, mime TEXT, size INTEGER,
+        uploader_id TEXT, uploader_name TEXT, provider TEXT, created INTEGER)`);
       sql.exec(`CREATE TABLE IF NOT EXISTS meta(key TEXT PRIMARY KEY, value TEXT)`);
       sql.exec(`CREATE INDEX IF NOT EXISTS messages_ts_idx ON messages(ts)`);
       // v1 老表升级：补列（列已存在会抛错，直接忽略）
@@ -175,6 +198,7 @@ export class ChatRoom {
         ["identities", "revoked", "INTEGER DEFAULT 0"],
         ["identities", "last_seen", "INTEGER DEFAULT 0"],
         ["messages", "platform", "TEXT DEFAULT 'web'"],
+        ["messages", "attachments", "TEXT DEFAULT '[]'"],
         ["approvals", "minutes", "INTEGER DEFAULT 10"],
       ]) {
         try { sql.exec(`ALTER TABLE ${table} ADD COLUMN ${col} ${def}`); } catch { /* 已有该列 */ }
@@ -235,18 +259,19 @@ export class ChatRoom {
       return !!d.muted;
     } catch { return false; }
   }
-  async storeMessage(sender, text, replyTo) {
+  async storeMessage(sender, text, replyTo, attachments) {
     const sql = this.ctx.storage.sql;
+    const atts = sanitizeAttachments(attachments);
     const msg = {
       id: newId("m_"), sender_id: sender.id, sender_name: sender.name,
       sender_type: sender.type, platform: sender.platform || "web",
       text, reply_to: replyTo || null,
-      mentions: parseMentions(text), ts: Date.now(),
+      mentions: parseMentions(text), attachments: atts, ts: Date.now(),
     };
-    sql.exec(`INSERT INTO messages(id,sender_id,sender_name,sender_type,platform,text,reply_to,mentions,ts)
-      VALUES(?,?,?,?,?,?,?,?,?)`,
+    sql.exec(`INSERT INTO messages(id,sender_id,sender_name,sender_type,platform,text,reply_to,mentions,attachments,ts)
+      VALUES(?,?,?,?,?,?,?,?,?,?)`,
       msg.id, msg.sender_id, msg.sender_name, msg.sender_type, msg.platform, msg.text,
-      msg.reply_to, JSON.stringify(msg.mentions), msg.ts);
+      msg.reply_to, JSON.stringify(msg.mentions), JSON.stringify(msg.attachments), msg.ts);
     this.pruneOldMessages();
     return msg;
   }
@@ -338,6 +363,34 @@ export class ChatRoom {
         inboxId, token, String(body.purpose || "").slice(0, 120), req.name, Date.now(), "pending");
       return json({ token, id, name, type, platform, role, bridge: finalBridge, inbox_id: inboxId,
         note: req.role === "moderator" ? "key 已进房主私信箱，由房主分发" : "key 已生成，请私下发给对方" });
+    }
+    // 成员给自己建一座微信桥的桥身份（自助建桥用；每人一个）。房主走管理面板。
+    // 桥身份的名字就用成员自己的名字（与主身份同名，@名字就能推回他微信）。
+    // 已有则直接返回旧的（幂等）；桥身份被吊销了才重建。
+    if (url.pathname === "/registry/create-my-bridge" && request.method === "POST") {
+      const req = identByToken(String(body.requester_token || ""));
+      if (!req || req.revoked) return err("需要有效的 Token", 401);
+      if (req.role === "owner") return err("房主请用管理面板的微信桥", 403);
+      const existing = sql.exec(`SELECT bridge_id, bridge_token FROM bridge_owners WHERE owner_id=?`, req.id).toArray()[0];
+      if (existing) {
+        const ident = identById(String(existing.bridge_id));
+        if (ident && !ident.revoked) {
+          return json({ token: existing.bridge_token, id: ident.id, name: ident.name, existing: true });
+        }
+        sql.exec(`DELETE FROM bridge_owners WHERE owner_id=?`, req.id);
+      }
+      const name = String(req.name || "").trim().slice(0, 30) || "微信桥";
+      const token = newToken();
+      const id = newId("u_");
+      const rules = sanitizeRules(null);
+      sql.exec(`INSERT INTO identities(token,id,name,type,platform,role,bridge,rules,revoked,created) VALUES(?,?,?,?,?,?,?,?,?,?)`,
+        token, id, name, "human", "wechat", "member", "wechat", JSON.stringify(rules), 0, Date.now());
+      sql.exec(`INSERT INTO bridge_owners(owner_id,bridge_id,bridge_token,created) VALUES(?,?,?,?)`,
+        req.id, id, token, Date.now());
+      const inboxId = newId("k_");
+      sql.exec(`INSERT INTO key_inbox(id,token,purpose,created_by,created,status) VALUES(?,?,?,?,?,?)`,
+        inboxId, token, "微信桥：" + name, req.name, Date.now(), "pending");
+      return json({ token, id, name, existing: false });
     }
     if (url.pathname === "/registry/set-rules" && request.method === "POST") {
       const row = identByToken(String(body.token || ""));
@@ -617,6 +670,30 @@ export class ChatRoom {
       sql.exec(`INSERT OR REPLACE INTO meta(key,value) VALUES(?,?)`, String(body.key || ""), String(body.value ?? ""));
       return json({ ok: true });
     }
+    // ---------- 文件记录（Worker 的上传/下载/删除端点用；内部调用） ----------
+    if (url.pathname === "/registry/files/record" && request.method === "POST") {
+      const f = body || {};
+      if (!f.id || !f.object_key) return err("缺少文件 id 或 object_key", 400);
+      sql.exec(`INSERT OR REPLACE INTO files(id,room,object_key,name,mime,size,uploader_id,uploader_name,provider,created)
+        VALUES(?,?,?,?,?,?,?,?,?,?)`,
+        String(f.id), String(f.room || "general"), String(f.object_key), String(f.name || "").slice(0, 200),
+        String(f.mime || "application/octet-stream").slice(0, 100), Math.max(0, Math.floor(+f.size || 0)),
+        String(f.uploader_id || ""), String(f.uploader_name || "").slice(0, 30),
+        String(f.provider || ""), Date.now());
+      return json({ ok: true, id: String(f.id) });
+    }
+    if (url.pathname === "/registry/files/get") {
+      const row = sql.exec(`SELECT * FROM files WHERE id=?`, url.searchParams.get("id") || "").toArray()[0];
+      if (!row) return err("文件不存在", 404);
+      return json(row);
+    }
+    if (url.pathname === "/registry/files/delete" && request.method === "POST") {
+      const row = sql.exec(`SELECT uploader_id FROM files WHERE id=?`, String(body.id || "")).toArray()[0];
+      if (!row) return err("文件不存在", 404);
+      if (!body.is_admin && row.uploader_id !== String(body.requester_id || "")) return err("只能删自己上传的文件", 403);
+      sql.exec(`DELETE FROM files WHERE id=?`, String(body.id));
+      return json({ ok: true });
+    }
     return err("unknown registry path", 404);
   }
 
@@ -626,9 +703,9 @@ export class ChatRoom {
     const sql = this.ctx.storage.sql;
     if (url.pathname === "/room/history") {
       const pruned = this.pruneOldMessages();
-      const limit = Math.max(1, Math.min(100, parseInt(url.searchParams.get("limit") || "50", 10) || 50));
+      const limit = Math.max(1, Math.min(100, parseInt(url.searchParams.get("limit") || "20", 10) || 20));
       const rows = sql.exec(`SELECT * FROM messages ORDER BY ts DESC LIMIT ?`, limit).toArray().reverse();
-      const messages = rows.map((r) => ({ ...r, mentions: JSON.parse(r.mentions || "[]") }));
+      const messages = rows.map((r) => ({ ...r, mentions: JSON.parse(r.mentions || "[]"), attachments: JSON.parse(r.attachments || "[]") }));
       return json({ messages, members: await this.presence(), pruned });
     }
     if (url.pathname === "/room/send" && request.method === "POST") {
@@ -640,11 +717,12 @@ export class ChatRoom {
       };
       const body = await request.json().catch(() => ({}));
       const text = String(body.text || "").trim();
-      if (!text) return err("消息不能为空");
+      const atts = sanitizeAttachments(body.attachments);
+      if (!text && atts.length === 0) return err("消息不能为空");
       if (text.length > 2000) return err("消息太长，最多 2000 字");
       if (await this.isMuted(sender.id)) return err("你正在禁言中", 403);
       if (!this.checkRate(sender.id)) return err("发得太快了，10 秒内最多 5 条", 429);
-      const msg = await this.storeMessage(sender, text, String(body.reply_to || "").slice(0, 40) || null);
+      const msg = await this.storeMessage(sender, text, String(body.reply_to || "").slice(0, 40) || null, atts);
       this.broadcast({ type: "message", message: msg, members: await this.presence() });
       return json({ message: msg });
     }
@@ -680,8 +758,8 @@ export class ChatRoom {
       this.ctx.acceptWebSocket(server);
       server.serializeAttachment(sender);
       this.pruneOldMessages();
-      const history = sql.exec(`SELECT * FROM messages ORDER BY ts DESC LIMIT 50`).toArray().reverse()
-        .map((r) => ({ ...r, mentions: JSON.parse(r.mentions || "[]") }));
+      const history = sql.exec(`SELECT * FROM messages ORDER BY ts DESC LIMIT 20`).toArray().reverse()
+        .map((r) => ({ ...r, mentions: JSON.parse(r.mentions || "[]"), attachments: JSON.parse(r.attachments || "[]") }));
       server.send(JSON.stringify({ type: "history", messages: history, members: await this.presence(), you: sender }));
       this.presence().then((m) => this.broadcast({ type: "presence", members: m })).catch(() => {});
       return new Response(null, { status: 101, webSocket: client });
@@ -711,10 +789,11 @@ export class ChatRoom {
       }
       if (data.type === "message") {
         const text = String(data.text || "").trim();
-        if (!text || text.length > 2000) { ws.send(JSON.stringify({ type: "error", error: "消息为空或太长" })); return; }
+        const atts = sanitizeAttachments(data.attachments);
+        if ((!text && atts.length === 0) || text.length > 2000) { ws.send(JSON.stringify({ type: "error", error: "消息为空或太长" })); return; }
         if (await this.isMuted(sender.id)) { ws.send(JSON.stringify({ type: "error", error: "你正在禁言中" })); return; }
         if (!this.checkRate(sender.id)) { ws.send(JSON.stringify({ type: "error", error: "发得太快了，10 秒内最多 5 条" })); return; }
-        const msg = await this.storeMessage(sender, text, String(data.reply_to || "").slice(0, 40) || null);
+        const msg = await this.storeMessage(sender, text, String(data.reply_to || "").slice(0, 40) || null, atts);
         this.broadcast({ type: "message", message: msg, members: await this.presence() });
       }
     } catch { /* 坏消息直接丢掉 */ }
@@ -941,7 +1020,21 @@ export function routePushTargets(msg, boundByName, allBound, lastFrom, byId) {
   const mentions = msg.mentions || [];
   const targets = new Set();
   for (const name of mentions) {
-    if (boundByName.has(name)) targets.add(boundByName.get(name));
+    if (boundByName.has(name)) {
+      targets.add(boundByName.get(name));
+      continue;
+    }
+    // 提及解析（parseMentions）在空格处截断，如 @bridge-wechat #2 只会得到
+    // "bridge-wechat"，与绑定名 "bridge-wechat #2" 精确匹配不上。若该提及恰
+    // 好是唯一一个绑定名的词边界前缀（下一位是空格/标点而非字母数字），则按
+    // 那个绑定名路由；匹配到多个时不推，避免发错微信。
+    const cands = [...boundByName.keys()].filter(
+      (b) =>
+        b.startsWith(name) &&
+        b.length > name.length &&
+        !/[\p{L}\p{N}_]/u.test(b[name.length]),
+    );
+    if (cands.length === 1) targets.add(boundByName.get(cands[0]));
   }
   if (mentions.includes("all") || mentions.includes("所有人")) {
     for (const w of allBound) targets.add(w);
@@ -1076,6 +1169,17 @@ async function containerFetch(env, path, init = {}) {
   } catch (e) {
     return { status: 502, data: { error: "容器桥连不上：" + (e && e.message ? e.message : String(e)) } };
   }
+}
+
+// 自助建桥：按 owner_id 在容器桥列表里找调用者自己的桥（每人一座）。
+export function findBridgeByOwner(bridges, ownerId) {
+  return (bridges || []).find((b) => b && b.owner_id === ownerId) || null;
+}
+async function findMyBridge(env, ownerId) {
+  const { status, data } = await containerFetch(env, "/bridges");
+  if (status !== 200) return { error: data && data.error ? data.error : "容器桥连不上", status };
+  const mine = findBridgeByOwner(data.bridges || [], ownerId);
+  return { bridge: mine, all: data.bridges || [] };
 }
 
 function wechatSys(env) {
@@ -1292,6 +1396,228 @@ function needBridgeToken(request, env) {
 async function runWechatPollCycle(env, report = []) {
   return runPollCycle(env, wechatSys(env), report);
 }
+
+// ---------------- 文件存储（R2 / S3 / WebDAV） ----------------
+// 配置存在注册表 DO 的 meta 里（key=storage_config），由房主在管理面板里配。
+// R2 走 Worker 绑定 env.FILES（桶 ai-chatroom-files），不用配密钥；
+// S3 走 S3 兼容 API（SigV4 签名）；WebDAV 走 Basic Auth + PUT/GET/DELETE。
+const STORAGE_SECRET_PLACEHOLDER = "••••••••";
+const BLOCKED_EXTS = new Set(["exe", "bat", "cmd", "sh", "bash", "js", "mjs", "html", "htm", "php", "py", "pl", "rb", "jar", "msi", "dmg", "apk", "com", "scr", "vbs", "ps1", "app", "dex", "cpl", "gadget"]);
+const INLINE_MIME_PREFIX = ["image/", "video/", "audio/"];
+
+function defaultStorageConfig() {
+  return {
+    provider: "none",
+    max_file_mb: 10,
+    s3: { endpoint: "", region: "us-east-1", bucket: "", access_key_id: "", secret_access_key: "", force_path_style: false },
+    webdav: { url: "", username: "", password: "" },
+  };
+}
+function sanitizeStorageConfig(input) {
+  const c = defaultStorageConfig();
+  if (!input || typeof input !== "object") return c;
+  if (["none", "r2", "s3", "webdav"].includes(input.provider)) c.provider = input.provider;
+  const rawMb = +input.max_file_mb;
+  const mb = Number.isFinite(rawMb) ? Math.floor(rawMb) : 10;
+  c.max_file_mb = Math.max(1, Math.min(50, mb));
+  if (input.s3 && typeof input.s3 === "object") {
+    c.s3.endpoint = String(input.s3.endpoint || "").trim().slice(0, 200);
+    c.s3.region = String(input.s3.region || "us-east-1").trim().slice(0, 60) || "us-east-1";
+    c.s3.bucket = String(input.s3.bucket || "").trim().slice(0, 100);
+    c.s3.access_key_id = String(input.s3.access_key_id || "").trim().slice(0, 100);
+    c.s3.secret_access_key = String(input.s3.secret_access_key || "").slice(0, 200);
+    c.s3.force_path_style = !!input.s3.force_path_style;
+  }
+  if (input.webdav && typeof input.webdav === "object") {
+    c.webdav.url = String(input.webdav.url || "").trim().replace(/\/+$/, "").slice(0, 200);
+    c.webdav.username = String(input.webdav.username || "").slice(0, 100);
+    c.webdav.password = String(input.webdav.password || "").slice(0, 200);
+  }
+  return c;
+}
+function maskStorageConfig(c) {
+  const out = JSON.parse(JSON.stringify(c));
+  out.s3.secret_access_key = out.s3.secret_access_key ? STORAGE_SECRET_PLACEHOLDER : "";
+  out.webdav.password = out.webdav.password ? STORAGE_SECRET_PLACEHOLDER : "";
+  return out;
+}
+async function getStorageConfig(env) {
+  try {
+    const { data } = await regCall(env, "/registry/meta?key=storage_config");
+    if (data && data.value) {
+      const c = sanitizeStorageConfig(JSON.parse(data.value));
+      if (c.s3.secret_access_key === STORAGE_SECRET_PLACEHOLDER) c.s3.secret_access_key = "";
+      if (c.webdav.password === STORAGE_SECRET_PLACEHOLDER) c.webdav.password = "";
+      return c;
+    }
+  } catch { /* 没配过就用默认 */ }
+  return defaultStorageConfig();
+}
+async function saveStorageConfig(env, config) {
+  await regCall(env, "/registry/meta", { key: "storage_config", value: JSON.stringify(config) });
+}
+function fileExt(name) {
+  const m = String(name || "").toLowerCase().match(/\.([a-z0-9]+)$/);
+  return m ? m[1] : "";
+}
+function isBlockedFile(name) { return BLOCKED_EXTS.has(fileExt(name)); }
+function isInlineMime(mime) {
+  if (!mime) return false;
+  if (mime === "image/svg+xml") return false; // SVG 可能含脚本，只当附件下载
+  return INLINE_MIME_PREFIX.some((p) => mime.startsWith(p));
+}
+function formatFileName(name) {
+  return String(name || "file").replace(/[\\/:*?"<>|]/g, "_").slice(0, 200) || "file";
+}
+function b64Utf8(s) {
+  const bytes = new TextEncoder().encode(s);
+  let bin = "";
+  for (const b of bytes) bin += String.fromCharCode(b);
+  return btoa(bin);
+}
+// S3 兼容 API：SigV4 签名（WebCrypto）。endpoint 如 https://s3.us-east-1.amazonaws.com。
+async function sha256Hex(data) {
+  const buf = typeof data === "string" ? new TextEncoder().encode(data) : data;
+  const hash = await crypto.subtle.digest("SHA-256", buf);
+  return [...new Uint8Array(hash)].map((x) => x.toString(16).padStart(2, "0")).join("");
+}
+async function hmacSha256(key, data) {
+  const k = typeof key === "string" ? new TextEncoder().encode(key) : key;
+  const cryptoKey = await crypto.subtle.importKey("raw", k, { name: "HMAC", hash: "SHA-256" }, false, ["sign"]);
+  const sig = await crypto.subtle.sign("HMAC", cryptoKey, typeof data === "string" ? new TextEncoder().encode(data) : data);
+  return new Uint8Array(sig);
+}
+function hexEncode(bytes) {
+  return [...bytes].map((x) => x.toString(16).padStart(2, "0")).join("");
+}
+async function s3Fetch(cfg, method, key, body, contentType) {
+  const s3 = cfg.s3;
+  const endpoint = (s3.endpoint || "").replace(/\/+$/, "");
+  const region = s3.region || "us-east-1";
+  const bucket = s3.bucket;
+  if (!endpoint || !bucket || !s3.access_key_id || !s3.secret_access_key) {
+    throw new Error("S3 配置不完整（缺 endpoint/bucket/密钥）");
+  }
+  const encKey = key.split("/").map(encodeURIComponent).join("/");
+  let url;
+  if (s3.force_path_style) {
+    url = `${endpoint}/${bucket}/${encKey}`;
+  } else {
+    const u = new URL(endpoint);
+    url = `${u.protocol}//${bucket}.${u.host}${u.pathname.replace(/\/+$/, "")}/${encKey}`;
+  }
+  const amzDate = new Date().toISOString().replace(/[-:]/g, "").replace(/\.\d{3}/, "");
+  const dateStamp = amzDate.slice(0, 8);
+  const payloadHash = await sha256Hex(body === undefined ? new Uint8Array(0) : body);
+  const headers = {
+    host: new URL(url).host,
+    "x-amz-date": amzDate,
+    "x-amz-content-sha256": payloadHash,
+  };
+  if (contentType) headers["content-type"] = contentType;
+  const sortedKeys = Object.keys(headers).sort();
+  const canonicalHeaders = sortedKeys.map((k) => `${k}:${String(headers[k]).trim()}\n`).join("");
+  const signedHeaders = sortedKeys.join(";");
+  const canonicalRequest = [method, new URL(url).pathname, "", canonicalHeaders, signedHeaders, payloadHash].join("\n");
+  const scope = `${dateStamp}/${region}/s3/aws4_request`;
+  const stringToSign = ["AWS4-HMAC-SHA256", amzDate, scope, await sha256Hex(canonicalRequest)].join("\n");
+  const kDate = await hmacSha256("AWS4" + s3.secret_access_key, dateStamp);
+  const kRegion = await hmacSha256(kDate, region);
+  const kService = await hmacSha256(kRegion, "s3");
+  const kSigning = await hmacSha256(kService, "aws4_request");
+  const signature = hexEncode(await hmacSha256(kSigning, stringToSign));
+  const res = await fetch(url, {
+    method,
+    headers: { ...headers, Authorization: `AWS4-HMAC-SHA256 Credential=${s3.access_key_id}/${scope}, SignedHeaders=${signedHeaders}, Signature=${signature}` },
+    body: body === undefined ? undefined : body,
+  });
+  return res;
+}
+function webdavFetch(cfg, method, key, body, contentType) {
+  const w = cfg.webdav;
+  if (!w.url) throw new Error("WebDAV 配置不完整（缺 URL）");
+  const url = w.url + "/" + key.split("/").map(encodeURIComponent).join("/");
+  const headers = {};
+  if (w.username) headers.Authorization = "Basic " + b64Utf8(w.username + ":" + (w.password || ""));
+  if (contentType) headers["content-type"] = contentType;
+  return fetch(url, { method, headers, body: body === undefined ? undefined : body });
+}
+// 统一存取：R2 用绑定；S3 用 SigV4；WebDAV 用 Basic Auth。
+// key 是对象键（R2/S3 带 chatroom/ 前缀；WebDAV 是相对基础 URL 的路径）。
+function storageKeyFor(provider, fileId) {
+  return provider === "webdav" ? fileId : "chatroom/" + fileId;
+}
+async function storagePut(env, cfg, key, body, contentType) {
+  if (cfg.provider === "r2") {
+    if (!env.FILES) throw new Error("R2 绑定未配置（Worker 缺 FILES 绑定）");
+    await env.FILES.put(key, body, { httpMetadata: { contentType: contentType || "application/octet-stream" } });
+    return;
+  }
+  if (cfg.provider === "s3") {
+    const r = await s3Fetch(cfg, "PUT", key, body, contentType);
+    if (!r.ok) throw new Error(`S3 上传失败 HTTP ${r.status}`);
+    return;
+  }
+  if (cfg.provider === "webdav") {
+    const r = await webdavFetch(cfg, "PUT", key, body, contentType);
+    if (![200, 201, 204].includes(r.status)) throw new Error(`WebDAV 上传失败 HTTP ${r.status}`);
+    return;
+  }
+  throw new Error("存储未配置");
+}
+async function storageGet(env, cfg, key) {
+  if (cfg.provider === "r2") {
+    if (!env.FILES) throw new Error("R2 绑定未配置");
+    const obj = await env.FILES.get(key);
+    if (!obj) return null;
+    return { body: obj.body, contentType: obj.httpMetadata && obj.httpMetadata.contentType, size: obj.size };
+  }
+  if (cfg.provider === "s3") {
+    const r = await s3Fetch(cfg, "GET", key);
+    if (r.status === 404) return null;
+    if (!r.ok) throw new Error(`S3 下载失败 HTTP ${r.status}`);
+    return { body: r.body, contentType: r.headers.get("content-type"), size: parseInt(r.headers.get("content-length") || "0", 10) || 0 };
+  }
+  if (cfg.provider === "webdav") {
+    const r = await webdavFetch(cfg, "GET", key);
+    if (r.status === 404) return null;
+    if (!r.ok) throw new Error(`WebDAV 下载失败 HTTP ${r.status}`);
+    return { body: r.body, contentType: r.headers.get("content-type"), size: parseInt(r.headers.get("content-length") || "0", 10) || 0 };
+  }
+  throw new Error("存储未配置");
+}
+async function storageDelete(env, cfg, key) {
+  if (cfg.provider === "r2") {
+    if (!env.FILES) throw new Error("R2 绑定未配置");
+    await env.FILES.delete(key);
+    return;
+  }
+  if (cfg.provider === "s3") {
+    const r = await s3Fetch(cfg, "DELETE", key);
+    if (!r.ok && r.status !== 404) throw new Error(`S3 删除失败 HTTP ${r.status}`);
+    return;
+  }
+  if (cfg.provider === "webdav") {
+    const r = await webdavFetch(cfg, "DELETE", key);
+    if (!r.ok && r.status !== 404) throw new Error(`WebDAV 删除失败 HTTP ${r.status}`);
+    return;
+  }
+  throw new Error("存储未配置");
+}
+async function storageTest(env, cfg) {
+  const testKey = storageKeyFor(cfg.provider, "test-" + Date.now() + "-" + Math.random().toString(36).slice(2, 8) + ".txt");
+  const testBody = new TextEncoder().encode("ai-chatroom storage test");
+  await storagePut(env, cfg, testKey, testBody, "text/plain");
+  const got = await storageGet(env, cfg, testKey);
+  if (!got) throw new Error("测试文件写入后读不到");
+  const text = await new Response(got.body).text();
+  if (text !== "ai-chatroom storage test") throw new Error("测试文件内容对不上");
+  await storageDelete(env, cfg, testKey);
+  return { ok: true, provider: cfg.provider };
+}
+
+// 导出纯函数供测试（与 extractText、classifyInbound 等同理）。
+export { sanitizeAttachments, sanitizeStorageConfig, storageKeyFor, isBlockedFile, isInlineMime, fileExt, formatFileName, s3Fetch, webdavFetch, sha256Hex, hmacSha256 };
 
 export default {
   async fetch(request, env) {
@@ -1514,6 +1840,77 @@ export default {
         const { status, data } = await regCall(env, "/registry/wechat-unbind", { wechat_id: decodeURIComponent(unbindMatch[1]) });
         return json(data, status);
       }
+      // ---- 我的微信桥（成员自助；每人一座，用自己的名字建桥身份，扫码即绑定）----
+      // 房主走管理面板。桥身份由注册表按人发（create-my-bridge），容器桥记 owner_id 认领。
+      const myBridgeMatch = url.pathname.match(/^\/api\/bridge\/my-bridge(?:\/(login-start|login-status|login-verify|restart))?$/);
+      if (myBridgeMatch) {
+        const me = await authIdentity(env, request);
+        if (!me) return err("需要 Bearer <redacted>", 401);
+        if (me.role === "owner") return err("房主请用管理面板的微信桥", 403);
+        const action = myBridgeMatch[1];
+        const found = await findMyBridge(env, me.id);
+        if (found.error) return json({ error: found.error }, found.status || 502);
+        const mine = found.bridge;
+        if (request.method === "GET" && !action) {
+          return json({ ok: true, bridge: mine });
+        }
+        if (request.method === "POST" && !action) {
+          // 建桥（幂等：已有就直接走扫码；满 10 座就拒绝）。
+          if (mine) {
+            if (mine.bind_status === "bound") return json({ ok: true, bridge: mine, already: true });
+          } else if ((found.all || []).length >= 10) {
+            return err("桥已满（10/10），请联系房主", 400);
+          }
+          let bridge = mine;
+          if (!bridge) {
+            const { status: ks, data: kd } = await regCall(env, "/registry/create-my-bridge", { requester_token: me.token });
+            if (ks !== 200) return json(kd, ks);
+            const { status: cs, data: cd } = await containerFetch(env, "/bridges", {
+              method: "POST",
+              body: JSON.stringify({ name: kd.name, bridge_token: kd.token, identity_id: kd.id, identity_name: kd.name, owner_id: me.id }),
+            });
+            if (cs !== 201 && cs !== 200) return json(cd, cs);
+            bridge = cd.bridge || cd;
+          }
+          const bid = encodeURIComponent(bridge.id);
+          const { status: ls, data: ld } = await containerFetch(env, `/bridges/${bid}/login-start`, { method: "POST", body: JSON.stringify({}) });
+          if (ls === 200 && ld.qrcode_img_content) {
+            return json({ ok: true, bridge, qr_svg: makeQrSvgText(ld.qrcode_img_content) });
+          }
+          return json({ ok: true, bridge, login: ld });
+        }
+        if (!mine) return err("你还没有微信桥，先点创建", 404);
+        const bid = encodeURIComponent(mine.id);
+        if (action === "login-start" && request.method === "POST") {
+          const body = await bodyJson();
+          const { status, data } = await containerFetch(env, `/bridges/${bid}/login-start`, { method: "POST", body: JSON.stringify(body) });
+          if (status === 200 && data.qrcode_img_content) {
+            return json({ ...data, qr_svg: makeQrSvgText(data.qrcode_img_content) });
+          }
+          return json(data, status);
+        }
+        if (action === "login-status" && request.method === "GET") {
+          const { status, data } = await containerFetch(env, `/bridges/${bid}/login-status`);
+          return json(data, status);
+        }
+        if (action === "login-verify" && request.method === "POST") {
+          const body = await bodyJson();
+          const { status, data } = await containerFetch(env, `/bridges/${bid}/login-verify`, { method: "POST", body: JSON.stringify(body) });
+          return json(data, status);
+        }
+        if (action === "restart" && request.method === "POST") {
+          const { status, data } = await containerFetch(env, `/bridges/${bid}/restart`, { method: "POST" });
+          return json(data, status);
+        }
+        if (!action && request.method === "DELETE") {
+          const { status, data } = await containerFetch(env, `/bridges/${bid}`, { method: "DELETE" });
+          if (status === 200 && mine.ilink_user_id) {
+            await regCall(env, "/registry/wechat-unbind", { wechat_id: mine.ilink_user_id }).catch(() => {});
+          }
+          return json(data, status);
+        }
+        return err("unknown api", 404);
+      }
       // ---- 容器桥管理代理（房主专用；一座桥接一个微信号，上限 10）----
       if (url.pathname === "/api/admin/container-bridges" && request.method === "GET") {
         const me = await authIdentity(env, request);
@@ -1611,7 +2008,7 @@ export default {
           // 靠这一刷出现在在线名单里（5 分钟窗口）。
           const me = await authIdentity(env, request, true);
           if (!me) return err("需要 Bearer token", 401);
-          const r = await stub.fetch("https://do/room/history?limit=" + encodeURIComponent(url.searchParams.get("limit") || "50"));
+          const r = await stub.fetch("https://do/room/history?limit=" + encodeURIComponent(url.searchParams.get("limit") || "20"));
           return json(await r.json(), r.status);
         }
         if (m[2] === "messages" && request.method === "POST") {
@@ -1677,6 +2074,133 @@ export default {
           return r;
         }
       }
+      // ---- 文件存储 ----
+      // 上传：multipart/form-data，字段 file + room。返回 {id,name,mime,size,url}。
+      if (url.pathname === "/api/files/upload" && request.method === "POST") {
+        const me = await authIdentity(env, request);
+        if (!me) return err("需要 Bearer token", 401);
+        const cfg = await getStorageConfig(env);
+        if (cfg.provider === "none") return err("管理员还没配置文件存储", 503);
+        let form;
+        try { form = await request.formData(); } catch { return err("上传的不是 multipart 表单", 400); }
+        const file = form.get("file");
+        const room = String(form.get("room") || "general").trim() || "general";
+        if (!file || typeof file === "string") return err("没有收到文件", 400);
+        if (!(await roomExists(env, room))) return err("房间不存在", 404);
+        const name = formatFileName(file.name || "file");
+        if (isBlockedFile(name)) return err("这种类型的文件不允许上传（可执行/脚本类）", 400);
+        const maxBytes = cfg.max_file_mb * 1024 * 1024;
+        if (file.size > maxBytes) return err(`文件太大，单个文件上限 ${cfg.max_file_mb} MB`, 400);
+        if (file.size <= 0) return err("文件是空的", 400);
+        const id = newId("f_");
+        const key = storageKeyFor(cfg.provider, id);
+        let bytes;
+        try { bytes = await file.arrayBuffer(); } catch { return err("读文件失败", 400); }
+        try {
+          await storagePut(env, cfg, key, bytes, file.type || "application/octet-stream");
+        } catch (e) {
+          return err("存到外部存储失败：" + (e && e.message ? e.message : String(e)), 502);
+        }
+        const rec = { id, room, object_key: key, name, mime: file.type || "application/octet-stream", size: file.size, uploader_id: me.id, uploader_name: me.name, provider: cfg.provider };
+        const { status: rs, data: rd } = await regCall(env, "/registry/files/record", rec);
+        if (rs !== 200) {
+          await storageDelete(env, cfg, key).catch(() => {});
+          return err(rd.error || "记录文件失败", 500);
+        }
+        return json({ id, name, mime: rec.mime, size: rec.size, url: "/api/files/" + id });
+      }
+      // 存储状态（任意成员）：只告诉有没有配、哪家、上限，不含密钥。
+      if (url.pathname === "/api/files/status" && request.method === "GET") {
+        const me = await authIdentity(env, request);
+        if (!me) return err("需要 Bearer token", 401);
+        const cfg = await getStorageConfig(env);
+        return json({ enabled: cfg.provider !== "none", provider: cfg.provider, max_file_mb: cfg.max_file_mb });
+      }
+      // 下载 / 删除：/api/files/<id>。下载认 Bearer 头或 ?token=（img/video 标签发不出 Authorization 头）。
+      const fileMatch = url.pathname.match(/^\/api\/files\/([a-z0-9_]+)$/);
+      if (fileMatch && fileMatch[1] !== "upload" && fileMatch[1] !== "status" && request.method === "GET") {
+        const me = (await authIdentity(env, request)) || (await authQueryToken(env, url));
+        if (!me) return err("需要 Token 才能下载", 401);
+        const { status, data } = await regCall(env, "/registry/files/get?id=" + encodeURIComponent(fileMatch[1]));
+        if (status !== 200) return err(data.error || "文件不存在", 404);
+        const cfg = await getStorageConfig(env);
+        const readCfg = { ...cfg, provider: data.provider || cfg.provider };
+        let got;
+        try { got = await storageGet(env, readCfg, data.object_key); }
+        catch (e) { return err("从外部存储取文件失败：" + (e && e.message ? e.message : String(e)), 502); }
+        if (!got) return err("文件在存储里找不到了", 404);
+        const mime = data.mime || got.contentType || "application/octet-stream";
+        const inline = isInlineMime(mime);
+        const headers = {
+          "content-type": mime,
+          "content-disposition": inline ? "inline" : `attachment; filename="${encodeURIComponent(data.name)}"; filename*=UTF-8''${encodeURIComponent(data.name)}`,
+          "content-security-policy": "default-src 'none'; sandbox",
+          "x-content-type-options": "nosniff",
+          "cache-control": "private, max-age=3600",
+        };
+        if (got.size) headers["content-length"] = String(got.size);
+        return new Response(got.body, { status: 200, headers });
+      }
+      if (fileMatch && fileMatch[1] !== "upload" && fileMatch[1] !== "status" && request.method === "DELETE") {
+        const me = await authIdentity(env, request);
+        if (!me) return err("需要 Bearer token", 401);
+        const { status, data } = await regCall(env, "/registry/files/get?id=" + encodeURIComponent(fileMatch[1]));
+        if (status !== 200) return err(data.error || "文件不存在", 404);
+        const { status: ds, data: dd } = await regCall(env, "/registry/files/delete", { id: fileMatch[1], requester_id: me.id, is_admin: me.role === "owner" });
+        if (ds !== 200) return err(dd.error || "删记录失败", ds);
+        const cfg = await getStorageConfig(env);
+        const delCfg = { ...cfg, provider: data.provider || cfg.provider };
+        await storageDelete(env, delCfg, data.object_key).catch(() => {});
+        return json({ ok: true });
+      }
+      // ---- 管理员：存储配置 ----
+      if (url.pathname === "/api/admin/storage" && request.method === "GET") {
+        const me = await authIdentity(env, request);
+        const e = needRole(me, ["owner"]);
+        if (e) return e;
+        const cfg = await getStorageConfig(env);
+        return json({ ...maskStorageConfig(cfg), r2_available: !!env.FILES });
+      }
+      if (url.pathname === "/api/admin/storage" && request.method === "PUT") {
+        const me = await authIdentity(env, request);
+        const e = needRole(me, ["owner"]);
+        if (e) return e;
+        const body = await bodyJson();
+        const next = sanitizeStorageConfig(body);
+        const cur = await getStorageConfig(env);
+        if (next.s3.secret_access_key === STORAGE_SECRET_PLACEHOLDER) next.s3.secret_access_key = cur.s3.secret_access_key;
+        if (next.webdav.password === STORAGE_SECRET_PLACEHOLDER) next.webdav.password = cur.webdav.password;
+        if (next.provider === "r2" && !env.FILES) return err("R2 绑定未配置（Worker 缺 FILES 绑定），先部署带绑定的版本", 503);
+        if (next.provider === "s3" && (!next.s3.endpoint || !next.s3.bucket || !next.s3.access_key_id || !next.s3.secret_access_key)) {
+          return err("S3 配置不完整：endpoint、bucket、access key、secret key 都要填", 400);
+        }
+        if (next.provider === "webdav" && !next.webdav.url) return err("WebDAV 配置不完整：URL 要填", 400);
+        await saveStorageConfig(env, next);
+        return json({ ok: true, provider: next.provider, max_file_mb: next.max_file_mb });
+      }
+      if (url.pathname === "/api/admin/storage/test" && request.method === "POST") {
+        const me = await authIdentity(env, request);
+        const e = needRole(me, ["owner"]);
+        if (e) return e;
+        const body = await bodyJson();
+        let cfg;
+        if (body && (body.provider || body.s3 || body.webdav)) {
+          cfg = sanitizeStorageConfig(body);
+          const cur = await getStorageConfig(env);
+          if (cfg.s3.secret_access_key === STORAGE_SECRET_PLACEHOLDER) cfg.s3.secret_access_key = cur.s3.secret_access_key;
+          if (cfg.webdav.password === STORAGE_SECRET_PLACEHOLDER) cfg.webdav.password = cur.webdav.password;
+        } else {
+          cfg = await getStorageConfig(env);
+        }
+        if (cfg.provider === "none") return err("还没选存储提供方", 400);
+        if (cfg.provider === "r2" && !env.FILES) return err("R2 绑定未配置", 503);
+        try {
+          await storageTest(env, cfg);
+          return json({ ok: true, provider: cfg.provider, detail: "写入、读取、删除都通了" });
+        } catch (e2) {
+          return err("测试失败：" + (e2 && e2.message ? e2.message : String(e2)), 502);
+        }
+      }
       // ---- 微信桥（并进聊天室服务；旧独立 Worker 的端点原样搬过来）----
       if (url.pathname === "/qr" && request.method === "GET") {
         const code = (url.searchParams.get("code") || "").toUpperCase();
@@ -1724,12 +2248,29 @@ export default {
         const result = await runWechatPollCycle(env, report);
         return json({ result });
       }
-      // 迁移专用：从旧桥 Worker 导出状态后一次性写入（patch + contexts）。
-      // 只认 BRIDGE_TOKEN；用完即走，不常驻调用。
+      // 容器桥每轮拉取成功后回写状态（patch + contexts；也用于迁移时一次性写入）。
+      // 认两种凭证：BRIDGE_TOKEN（管理密钥；可写顶层字段或指定 bridge_id），
+      // 或桥身份 Token——容器子进程只持有这一个（它同时要拿它发 bridge-message、
+      // 连 WS、读绑定表）。桥身份只许写自己名下的桥记录：以容器 /bridges 里
+      // 的 identity_id 核对归属；顶层共享字段不许碰（防止多桥互相覆盖游标）。
       if (url.pathname === "/api/bridge/seed-state" && request.method === "POST") {
-        if (!needBridgeToken(request, env)) return err("需要 BRIDGE_TOKEN", 401);
+        const isAdmin = needBridgeToken(request, env);
+        let me = null;
+        if (!isAdmin) {
+          me = await authIdentity(env, request);
+          if (!me || !me.bridge) return err("需要 BRIDGE_TOKEN 或桥身份 Token", 401);
+        }
         const body = await bodyJson();
-        if (body.patch) await wechatDoCall(env, "set-state", { patch: body.patch, bridge_id: body.bridge_id });
+        const bridgeId = body.bridge_id ? String(body.bridge_id) : "";
+        if (me) {
+          if (!bridgeId) return err("桥身份回写必须带 bridge_id", 400);
+          const { status, data } = await containerFetch(env, "/bridges");
+          const mine = (data.bridges || []).find((b) => b && b.id === bridgeId);
+          if (status !== 200 || !mine || mine.identity_id !== me.id) {
+            return err("bridge_id 与该桥身份不符", 403);
+          }
+        }
+        if (body.patch) await wechatDoCall(env, "set-state", { patch: body.patch, bridge_id: bridgeId || undefined });
         let n = 0;
         for (const c of (body.contexts || [])) {
           if (c.wechat_id && c.context_token) {
@@ -1738,6 +2279,44 @@ export default {
           }
         }
         return json({ ok: true, contexts: n });
+      }
+      // ---- 3D 工作台快照（任务板入口用；快照由同步任务每 5 分钟推送）----
+      if (url.pathname === "/api/workbench/board" && request.method === "POST") {
+        const me = await authIdentity(env, request);
+        if (!me) return err("需要 Bearer token", 401);
+        const body = await bodyJson();
+        if (!body || typeof body !== "object" || !Array.isArray(body.tasks)) return err("快照里要有 tasks 数组", 400);
+        const snapshot = { ...body, updated_at: body.updated_at || new Date().toISOString() };
+        await regCall(env, "/registry/meta", { key: "workbench_board", value: JSON.stringify(snapshot) });
+        return json({ ok: true, updated_at: snapshot.updated_at });
+      }
+      if (url.pathname === "/api/workbench/board" && request.method === "GET") {
+        const me = await authIdentity(env, request);
+        if (!me) return err("需要 Bearer token", 401);
+        const { data } = await regCall(env, "/registry/meta?key=workbench_board");
+        if (!data || !data.value) return json({ board: null, updated_at: null });
+        let board = null;
+        try { board = JSON.parse(data.value); } catch { return json({ board: null, updated_at: null }); }
+        return json({ board, updated_at: board.updated_at || null });
+      }
+      // ---- Agent 审批看板快照（审批入口用；快照由同步任务每 5 分钟推送）----
+      if (url.pathname === "/api/approval-board" && request.method === "POST") {
+        const me = await authIdentity(env, request);
+        if (!me) return err("需要 Bearer token", 401);
+        const body = await bodyJson();
+        if (!body || typeof body !== "object" || !Array.isArray(body.pending)) return err("快照里要有 pending 数组", 400);
+        const snapshot = { ...body, updated_at: body.updated_at || new Date().toISOString() };
+        await regCall(env, "/registry/meta", { key: "approval_board", value: JSON.stringify(snapshot) });
+        return json({ ok: true, updated_at: snapshot.updated_at });
+      }
+      if (url.pathname === "/api/approval-board" && request.method === "GET") {
+        const me = await authIdentity(env, request);
+        if (!me) return err("需要 Bearer token", 401);
+        const { data } = await regCall(env, "/registry/meta?key=approval_board");
+        if (!data || !data.value) return json({ board: null, updated_at: null });
+        let board = null;
+        try { board = JSON.parse(data.value); } catch { return json({ board: null, updated_at: null }); }
+        return json({ board, updated_at: board.updated_at || null });
       }
       if (url.pathname.startsWith("/api/")) return err("unknown api", 404);
       if (env.ASSETS) return env.ASSETS.fetch(request);
@@ -1748,16 +2327,14 @@ export default {
   },
 
   async scheduled(controller, env, ctx) {
-    // 两条 Cron 共用一个 Worker：*/2 是小管家，* * * * * 是微信桥拉取。
-    // Pages 没有 Cron，这段只在 Worker 里跑。
-    if (controller.cron === "* * * * *") {
-      ctx.waitUntil((async () => {
-        const report = [];
-        const result = await runWechatPollCycle(env, report);
-        console.log(JSON.stringify({ cron: "wechat-poll", ...result }));
-      })());
-    } else {
+    // 只剩一条 Cron：*/2 是小管家。微信拉取已由容器桥接管（2026-11-11 停掉
+    // Worker 每分钟兜底拉取）；即使旧触发器残留也不再拉取，避免它用旧凭证
+    // 反复写 session_expired 造成误报。Pages 没有 Cron，这段只在 Worker 里跑。
+    // 手动拉取仍可用 /api/bridge/test-cron（桥 Token 鉴权）。
+    if (controller.cron === "*/2 * * * *") {
       ctx.waitUntil(handleModeratorScan(env));
+    } else {
+      console.log(JSON.stringify({ cron: "ignored", expression: controller.cron }));
     }
   },
 };
