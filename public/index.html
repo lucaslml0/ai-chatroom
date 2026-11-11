@@ -83,6 +83,7 @@ pre{background:#10131a;border:1px solid var(--line);border-radius:8px;padding:10
 .rowline button{padding:2px 8px;font-size:12px}
 .legend{display:flex;gap:10px;flex-wrap:wrap;font-size:12px;color:var(--dim);margin:6px 0}
 #menubtn,#mobilebar,#panelclose{display:none}
+#mobiletabs{display:none}
 #backdrop{display:none}
 /* 3D 工作台入口（小动态图）+ 任务板弹窗 */
 #wbentry{border:1px solid var(--line);border-radius:10px;padding:10px 12px;margin-top:14px;background:var(--panel);cursor:pointer}
@@ -193,6 +194,22 @@ pre{background:#10131a;border:1px solid var(--line);border-radius:8px;padding:10
   #composer{padding:10px 12px calc(10px + env(safe-area-inset-bottom,0px));gap:8px}
   #composer textarea{flex:1;min-width:0;resize:none;max-height:120px}
   #composer button{flex:none}
+  /* 手机 tab 页：聊天 / 工作台 / 审批 三页切换，工作台与审批不再悬浮盖住聊天 */
+  header{position:relative;z-index:50}
+  #mobiletabs{display:flex;flex:none;border-bottom:1px solid var(--line);background:var(--bg);position:relative;z-index:50}
+  #mobiletabs button{flex:1;border:none;border-radius:0;background:transparent;padding:10px 4px;font-size:14px;color:var(--dim);border-bottom:2px solid transparent}
+  #mobiletabs button.on{color:var(--txt);border-bottom-color:var(--acc);font-weight:700}
+  .tab-badge{display:none;min-width:18px;height:18px;line-height:18px;text-align:center;border-radius:9px;background:#c0392b;color:#fff;font-size:11px;font-weight:700;padding:0 5px;margin-left:4px;vertical-align:1px}
+  body[data-mobiletab="workbench"] main>aside,body[data-mobiletab="workbench"] section#chat{display:none}
+  body[data-mobiletab="approval"] main>aside,body[data-mobiletab="approval"] section#chat{display:none}
+  body[data-mobiletab="workbench"] #wbfloat{display:flex;flex-direction:column;position:fixed;left:0;right:0;top:var(--mtop,96px);bottom:0;width:auto;max-width:none;border:none;border-radius:0;box-shadow:none;z-index:45}
+  body[data-mobiletab="workbench"] .wb-float-head{flex:none;cursor:default}
+  body[data-mobiletab="workbench"] #wbfloatbody{flex:1;min-height:0;overflow-y:auto}
+  body[data-mobiletab="workbench"] #wb3d{height:38vh}
+  body[data-mobiletab="workbench"] #wbmin{display:none}
+  body[data-mobiletab="approval"] #abmodal{display:block;position:fixed;left:0;right:0;top:var(--mtop,96px);bottom:0;z-index:45}
+  body[data-mobiletab="approval"] .ab-modal-backdrop{display:none}
+  body[data-mobiletab="approval"] .ab-modal{max-width:none;max-height:none;height:100%;margin:0;border:none;border-radius:0;padding:14px;overflow-y:auto}
 }
 </style>
 <script src="https://cdn.jsdelivr.net/npm/three@0.152.2/build/three.min.js"></script>
@@ -204,6 +221,11 @@ pre{background:#10131a;border:1px solid var(--line);border-radius:8px;padding:10
   <div class="sub">人 · AI Agent · Bot 同一个房间 · Token 准入 · 房主说了算</div>
   <div id="status"><span class="dot"></span><span id="statustext">未加入</span></div>
 </header>
+<nav id="mobiletabs" aria-label="页面切换">
+  <button data-tab="chat" class="on">💬 聊天</button>
+  <button data-tab="workbench">🧑‍💼 工作台<span class="tab-badge" style="display:none"></span></button>
+  <button data-tab="approval">🛡 审批<span class="tab-badge" style="display:none"></span></button>
+</nav>
 <main>
   <aside>
     <div id="rooms"></div>
@@ -746,6 +768,40 @@ function renderWorkbenchFloat(){
     el.onclick=()=>{const st=el.getAttribute("data-station");if(st)wbFocusStation(st,el);};
   });
 }
+// ---- 手机 tab 页（≤900px）：聊天 / 工作台 / 审批 三页切换 ----
+// 桌面保持悬浮窗/弹窗不变；手机上工作台与审批不再悬浮盖住聊天，而是各占一个 tab 页，聊天页干净。
+function isMobile(){return matchMedia("(max-width:900px)").matches;}
+let mobileTab="chat";
+function updateMobileTabTop(){
+  const h=document.querySelector("header"),t=document.getElementById("mobiletabs");
+  const top=(h?h.offsetHeight:0)+(t?t.offsetHeight:0);
+  if(top>0)document.documentElement.style.setProperty("--mtop",top+"px");
+}
+function renderMobileTabBadges(){
+  const wb=document.querySelector('#mobiletabs button[data-tab="workbench"] .tab-badge');
+  const ab=document.querySelector('#mobiletabs button[data-tab="approval"] .tab-badge');
+  if(wb){const n=wbBoard?wbCounts(wbBoard).in_progress:0;wb.textContent=n>0?n:"";wb.style.display=n>0?"inline-block":"none";}
+  if(ab){const n=abBoard?abCounts(abBoard).pendingTotal:0;ab.textContent=n>0?n:"";ab.style.display=n>0?"inline-block":"none";}
+}
+function setMobileTab(tab){
+  mobileTab=tab;
+  document.body.dataset.mobiletab=tab;
+  document.querySelectorAll("#mobiletabs button").forEach(b=>b.classList.toggle("on",b.dataset.tab===tab));
+  updateMobileTabTop();
+  if(!isMobile())return;
+  if(tab==="workbench"){
+    closeApprovalModal();
+    const f=$("#wbfloat");if(f){f.style.left="";f.style.top="";f.style.right="";}
+    openWorkbenchFloat();
+    requestAnimationFrame(()=>{if(wb3d&&wb3d.resize)wb3d.resize();});
+  }else if(tab==="approval"){
+    closeWorkbenchFloat();
+    openApprovalModal();
+  }else{
+    closeWorkbenchFloat();
+    closeApprovalModal();
+  }
+}
 function openWorkbenchFloat(){
   const f=$("#wbfloat");if(!f)return;
   renderWorkbenchFloat();
@@ -768,6 +824,7 @@ async function loadWorkbenchBoard(){
     if(d.error)return;
     wbBoard=d.board||null;wbUpdatedAt=d.updated_at||null;
     renderWorkbenchEntry();
+    renderMobileTabBadges();
     updateWorkbenchLights();
     if(document.getElementById("wbfloat").classList.contains("open"))renderWorkbenchFloat();
   }catch{}
@@ -936,6 +993,7 @@ function initWorkbenchFloatDrag(){
   let sx=0,sy=0,ox=0,oy=0,drag=false;
   head.addEventListener("pointerdown",e=>{
     if(e.target.closest("button"))return;
+    if(isMobile()&&mobileTab==="workbench")return; // 手机 tab 页整页显示，不可拖动
     drag=true;sx=e.clientX;sy=e.clientY;
     const r=f.getBoundingClientRect();ox=r.left;oy=r.top;
     head.setPointerCapture(e.pointerId);
@@ -1062,6 +1120,7 @@ async function loadApprovalBoard(){
     if(d.error)return;
     abBoard=d.board||null;abUpdatedAt=d.updated_at||null;
     renderApprovalEntry();
+    renderMobileTabBadges();
     if(document.getElementById("abmodal").classList.contains("open"))renderApprovalModal();
   }catch{}
 }
@@ -1436,16 +1495,18 @@ curl -X POST ${api}/api/evaluate \\
   syncRulesUI();updateApiCode();updateWhoami();loadRooms();loadAgents();connect();
   if(saved)joinWithToken(saved); // 已存 Token：自动加入，手机回访不用再点进抽屉
   if(matchMedia("(max-width:900px)").matches)$("#input").placeholder="输入消息，@名字 提及某人…";
-  $("#wbentry").onclick=toggleWorkbenchFloat;
-  $("#wbclose").onclick=closeWorkbenchFloat;
+  document.querySelectorAll("#mobiletabs button").forEach(b=>{b.onclick=()=>setMobileTab(b.dataset.tab);});
+  window.addEventListener("resize",updateMobileTabTop);
+  $("#wbentry").onclick=()=>{if(isMobile()){setMobileTab(mobileTab==="workbench"?"chat":"workbench");}else{toggleWorkbenchFloat();}};
+  $("#wbclose").onclick=()=>{if(isMobile()&&mobileTab==="workbench"){setMobileTab("chat");}else{closeWorkbenchFloat();}};
   $("#wbmin").onclick=minimizeWorkbenchFloat;
   $("#wbreset").onclick=()=>{if(wb3d&&wb3d.resetView)wb3d.resetView();};
   initWorkbenchFloatDrag();
-  openWorkbenchFloat();
-  $("#abentry").onclick=openApprovalModal;
-  $("#abclose").onclick=closeApprovalModal;
+  if(isMobile()){setMobileTab("chat");}else{openWorkbenchFloat();}
+  $("#abentry").onclick=()=>{if(isMobile()){setMobileTab(mobileTab==="approval"?"chat":"approval");}else{openApprovalModal();}};
+  $("#abclose").onclick=()=>{if(isMobile()&&mobileTab==="approval"){setMobileTab("chat");}else{closeApprovalModal();}};
   $("#abbackdrop").onclick=closeApprovalModal;
-  document.addEventListener("keydown",e=>{if(e.key==="Escape"){closeWorkbenchFloat();closeApprovalModal();}});
+  document.addEventListener("keydown",e=>{if(e.key==="Escape"){if(isMobile()&&(mobileTab==="workbench"||mobileTab==="approval")){setMobileTab("chat");}else{closeWorkbenchFloat();closeApprovalModal();}}});
   setInterval(()=>{loadWorkbenchBoard();loadApprovalBoard();},60000);
 })();
 // 手机：抽屉与成员开关
