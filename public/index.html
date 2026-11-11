@@ -56,8 +56,8 @@ section#chat{display:flex;flex-direction:column;min-width:0;min-height:0}
 .hint.yes{color:#3ecf8e}.hint.no{color:#777}
 .hint button{padding:1px 8px;font-size:12px;margin-left:6px}
 #typing{padding:0 16px;color:var(--dim);font-size:12px;min-height:18px}
-#composer{border-top:1px solid var(--line);padding:12px 16px;display:flex;gap:8px}
-#composer input{flex:1}
+#composer{border-top:1px solid var(--line);padding:12px 16px;display:flex;gap:8px;align-items:flex-end}
+#composer textarea{flex:1;resize:none;max-height:120px;overflow-y:auto}
 #replybar{padding:6px 16px 0;color:var(--dim);font-size:13px;display:none}
 #whoami{padding:6px 16px 0;color:var(--dim);font-size:12px;display:flex;gap:6px;align-items:center;flex:none}
 #whoami button{padding:1px 8px;font-size:12px}
@@ -115,7 +115,7 @@ pre{background:#10131a;border:1px solid var(--line);border-radius:8px;padding:10
   .msg{max-width:100%}
   .avatar{width:32px;height:32px;font-size:16px}
   #composer{padding:10px 12px calc(10px + env(safe-area-inset-bottom,0px));gap:8px}
-  #composer input{flex:1;min-width:0}
+  #composer textarea{flex:1;min-width:0;resize:none;max-height:120px}
   #composer button{flex:none}
 }
 </style>
@@ -159,7 +159,7 @@ pre{background:#10131a;border:1px solid var(--line);border-radius:8px;padding:10
     <div id="replybar"></div>
     <div id="whoami">当前身份：未加入</div>
     <div id="composer">
-      <input id="input" placeholder="输入消息，@名字 可以提及某人，@Moderator 问小管家…" autocomplete="off" enterkeyhint="send">
+      <textarea id="input" rows="1" placeholder="输入消息，Alt/⌘+回车发送，@名字 可以提及某人，@Moderator 问小管家…" autocomplete="off"></textarea>
       <button class="primary" id="send">发送</button>
     </div>
   </section>
@@ -217,6 +217,14 @@ pre{background:#10131a;border:1px solid var(--line);border-radius:8px;padding:10
     <label>自动回复冷却（秒）</label><input id="cooldown" type="number" value="30" min="0" max="3600">
     <button id="saverules" style="width:100%;margin-top:10px">保存规则</button>
     <p class="note" id="rulesaved"></p>
+
+    <div id="mybridge" style="display:none">
+      <h4>🌉 我的微信桥</h4>
+      <p class="note">把你的微信接进聊天室：建桥后扫码登录自己的 ClawBot，房里 @你 就能推到你微信上。每人一座桥，全房最多 10 座。二维码只发给你自己，别公开贴到房里。</p>
+      <div id="mybridgeinfo"></div>
+      <button id="createmybridge" style="width:100%;margin-top:8px">＋创建我的微信桥并扫码绑定</button>
+      <div id="mybridgeqr" style="display:none"></div>
+    </div>
 
     <h4>🤖 Agent 名录</h4>
     <div id="agentlist" class="note">未加载。</div>
@@ -432,7 +440,7 @@ function startPoll(){if(pollTimer||!me)return;pollTimer=setInterval(async()=>{
 function stopPoll(){clearInterval(pollTimer);pollTimer=null;}
 async function sendMessage(){
   const text=$("#input").value.trim();if(!text||!me){if(!me)alert("先用 Token 进入聊天室");return;}
-  $("#input").value="";
+  $("#input").value="";autogrow();
   if(ws&&ws.readyState===1){ws.send(JSON.stringify({type:"message",text,reply_to:replyTo}));}
   else{
     const r=await fetch(`${api}/api/rooms/${room}/messages`,{method:"POST",headers:authHeaders(),
@@ -446,8 +454,9 @@ async function sendDelete(id){
   msgs.delete(id);document.querySelector(`[data-id="${id}"]`)?.remove();
 }
 $("#send").onclick=sendMessage;
-$("#input").addEventListener("keydown",e=>{if(e.key==="Enter")sendMessage();});
-$("#input").addEventListener("input",()=>{if(ws&&ws.readyState===1)ws.send(JSON.stringify({type:"typing",typing:$("#input").value.length>0}));});
+$("#input").addEventListener("keydown",e=>{if(e.key==="Enter"&&(e.altKey||e.metaKey)){e.preventDefault();sendMessage();}});
+function autogrow(){const t=$("#input");t.style.height="auto";t.style.height=Math.min(t.scrollHeight,120)+"px";}
+$("#input").addEventListener("input",()=>{autogrow();if(ws&&ws.readyState===1)ws.send(JSON.stringify({type:"typing",typing:$("#input").value.length>0}));});
 async function loadAgents(){
   try{const r=await fetch(api+"/api/agents");const d=await r.json();
     $("#agentlist").innerHTML=(d.agents||[]).length?d.agents.map(a=>{
@@ -552,6 +561,7 @@ async function joinWithToken(token){
   $("#meinfo").textContent=`已加入：${me.name}（${TYPE_NAME[me.type]||me.type} · ${me.role==="owner"?"房主":me.role==="moderator"?"Moderator":"成员"}）`;
   if(me.role==="owner"||me.role==="moderator"){$("#admin").style.display="block";loadAdmin();}
   if(me.role==="owner")$("#roomcreate").style.display="block";
+  if(me.role!=="owner"){$("#mybridge").style.display="block";loadMyBridge();}
   updateWhoami();updateApiCode();connect();loadAgents();
   return true;
 }
@@ -638,6 +648,76 @@ async function showBridgeQr(bridgeId,force){
     else if(s.status==="error"){clearInterval(bridgeQrTimer);st.textContent="登录出错："+(s.error||"");}
   },3000);
 }
+let myBridgeQrTimer=null;
+async function loadMyBridge(){
+  const info=$("#mybridgeinfo"); if(!info) return;
+  const r=await fetch(api+"/api/bridge/my-bridge",{headers:authHeaders()}).then(r=>r.json()).catch(()=>({error:"连不上"}));
+  if(r.error){info.innerHTML=`<span class="note">我的微信桥不可用：${esc(r.error)}</span>`;return;}
+  const b=r.bridge;
+  if(!b){info.innerHTML=`<span class="note">你还没有微信桥，点下面创建，扫码绑定自己的微信。</span>`;$("#createmybridge").style.display="block";return;}
+  const st=b.status||"", bs=b.bind_status||"";
+  const badge=st==="running"&&bs==="bound"?"🟢 在跑 · 已绑定":st==="running"?"🟡 在跑 · 未绑定":st==="unbound"?"🟡 等扫码":st==="stopped"?"⚪ 已停":st==="error"?"🔴 异常":esc(st||"未知");
+  const last=b.last_poll_at?new Date(b.last_poll_at).toLocaleTimeString("zh-CN"):"—";
+  const wx=b.ilink_user_id||"未绑定";
+  info.innerHTML=`<div class="rowline"><span><b>${esc(b.name||b.id)}</b> ${badge}<br><span class="note">微信 ${esc(String(wx).slice(0,24))} · 最近拉取 ${last}</span></span><span>${bs!=="bound"?`<button id="mybridgeqrbtn">扫码绑定</button> `:""}<button id="mybridgerestart">重启</button> <button id="mybridgedel">删除</button></span></div>`;
+  $("#createmybridge").style.display="none";
+  const qb=$("#mybridgeqrbtn"); if(qb)qb.onclick=()=>showMyBridgeQr();
+  $("#mybridgerestart").onclick=async()=>{await fetch(api+"/api/bridge/my-bridge/restart",{method:"POST",headers:authHeaders()});loadMyBridge();};
+  $("#mybridgedel").onclick=async()=>{if(!confirm("删除你的微信桥？微信会断开，之后可以重建。"))return;await fetch(api+"/api/bridge/my-bridge",{method:"DELETE",headers:authHeaders()});$("#mybridgeqr").style.display="none";loadMyBridge();};
+}
+async function showMyBridgeQr(){
+  const box=$("#mybridgeqr");box.style.display="block";
+  box.innerHTML=`<span class="note">正在生成登录二维码…</span>`;
+  const r=await fetch(api+"/api/bridge/my-bridge/login-start",{method:"POST",headers:authHeaders(),body:JSON.stringify({})});
+  const d=await r.json();
+  if(d.error){
+    if(/already bound/i.test(d.error)){
+      box.innerHTML=`<span class="note">你的桥已经绑定过了，无需重复扫码。会话过期时可以强制重新扫码。</span><br><button id="myforcelogin" style="margin-top:8px">强制重新扫码</button>`;
+      $("#myforcelogin").onclick=()=>showMyBridgeQrForce();
+    } else box.innerHTML=`<span class="note">二维码生成失败：${esc(d.error)}</span>`;
+    return;
+  }
+  renderMyBridgeQr(d);
+}
+async function showMyBridgeQrForce(){
+  const box=$("#mybridgeqr");box.style.display="block";
+  box.innerHTML=`<span class="note">正在生成登录二维码…</span>`;
+  const r=await fetch(api+"/api/bridge/my-bridge/login-start",{method:"POST",headers:authHeaders(),body:JSON.stringify({force:true})});
+  const d=await r.json();
+  if(d.error){box.innerHTML=`<span class="note">二维码生成失败：${esc(d.error)}</span>`;return;}
+  renderMyBridgeQr(d);
+}
+function renderMyBridgeQr(d){
+  const box=$("#mybridgeqr");
+  box.innerHTML=`<b>扫码绑定微信（登录二维码，过期自动刷新）：</b>
+    <div style="max-width:240px;margin:8px auto;background:#fff;border-radius:8px;padding:8px">${d.qr_svg||""}</div>
+    <div class="note">用要绑定的那个微信扫码确认。扫码即绑定，不用再发绑定码。二维码只发给你自己，别公开贴到房里。</div>
+    <div class="note" id="mybridgeqrstatus">等待扫码…</div>
+    <div id="mybridgeverify" style="display:none;margin-top:8px"><input id="myverifycode" placeholder="手机上的验证码" style="width:140px"><button id="mysendverify">提交验证码</button></div>`;
+  $("#mysendverify").onclick=async()=>{
+    const code=$("#myverifycode").value.trim();if(!code){alert("先填验证码");return;}
+    await fetch(api+"/api/bridge/my-bridge/login-verify",{method:"POST",headers:authHeaders(),body:JSON.stringify({verify_code:code})});
+    $("#mybridgeverify").style.display="none";$("#mybridgeqrstatus").textContent="验证码已提交，继续等确认…";
+  };
+  if(myBridgeQrTimer)clearInterval(myBridgeQrTimer);
+  myBridgeQrTimer=setInterval(async()=>{
+    const s=await fetch(api+"/api/bridge/my-bridge/login-status",{headers:authHeaders()}).then(r=>r.json()).catch(()=>({}));
+    const st=$("#mybridgeqrstatus"); if(!st){clearInterval(myBridgeQrTimer);return;}
+    if(s.status==="confirmed"||s.status==="already_bound"){clearInterval(myBridgeQrTimer);st.textContent=`已绑定：${s.ilink_user_id||""}，桥已开始拉取。`;loadMyBridge();}
+    else if(s.status==="need_verifycode"){st.textContent="微信要求输验证码：把手机上显示的数字填下面，点提交。";$("#mybridgeverify").style.display="block";}
+    else if(s.status==="expired"){st.textContent="二维码过期了，正在刷新…";clearInterval(myBridgeQrTimer);showMyBridgeQr();}
+    else if(s.status==="error"){clearInterval(myBridgeQrTimer);st.textContent="登录出错："+(s.error||"");}
+  },3000);
+}
+$("#createmybridge").onclick=async()=>{
+  const r=await fetch(api+"/api/bridge/my-bridge",{method:"POST",headers:authHeaders(),body:JSON.stringify({})});
+  const d=await r.json();
+  if(d.error){alert(d.error);return;}
+  if(d.qr_svg){renderMyBridgeQr(d);}
+  else if(d.bridge&&d.bridge.bind_status==="bound"){alert("桥已绑定。");loadMyBridge();}
+  else{showMyBridgeQr();}
+  loadMyBridge();
+};
 $("#createbridge").onclick=async()=>{
   const name=$("#bridgename").value.trim();if(!name){alert("先填新桥名字");return;}
   const r=await fetch(api+"/api/admin/create-key",{method:"POST",headers:authHeaders(),
