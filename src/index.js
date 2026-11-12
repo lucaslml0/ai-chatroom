@@ -758,7 +758,7 @@ export class ChatRoom {
       this.ctx.acceptWebSocket(server);
       server.serializeAttachment(sender);
       this.pruneOldMessages();
-      const history = sql.exec(`SELECT * FROM messages ORDER BY ts DESC LIMIT 20`).toArray().reverse()
+      const history = sql.exec(`SELECT * FROM messages ORDER BY ts DESC LIMIT 50`).toArray().reverse()
         .map((r) => ({ ...r, mentions: JSON.parse(r.mentions || "[]"), attachments: JSON.parse(r.attachments || "[]") }));
       server.send(JSON.stringify({ type: "history", messages: history, members: await this.presence(), you: sender }));
       this.presence().then((m) => this.broadcast({ type: "presence", members: m })).catch(() => {});
@@ -778,6 +778,71 @@ export class ChatRoom {
     }
   }
 
+  // ---------- 任务自报（WebSocket）----------
+  // 房间 DO 直接读写注册表 DO 的 meta（key=tasks），与 REST 接口共用同一份数据。
+  // 身份取自 WS 连接的 token（附件里的 sender）。WS 里只认 agent_id 归属，
+  // 房主越权改任务请走 REST（REST 有 role）。
+  async regMetaGet(key) {
+    const stub = this.env.CHATROOM.get(this.env.CHATROOM.idFromName("__registry__"));
+    const r = await stub.fetch("https://do/registry/meta?key=" + encodeURIComponent(key));
+    const d = await r.json().catch(() => ({}));
+    return d.value ?? null;
+  }
+  async regMetaSet(key, value) {
+    const stub = this.env.CHATROOM.get(this.env.CHATROOM.idFromName("__registry__"));
+    await stub.fetch("https://do/registry/meta", {
+      method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ key, value }),
+    });
+  }
+  async loadTasksWs() {
+    try {
+      const arr = JSON.parse((await this.regMetaGet(TASKS_META_KEY)) || "[]");
+      return Array.isArray(arr) ? arr : [];
+    } catch { return []; }
+  }
+  async saveTasksWs(tasks) {
+    await this.regMetaSet(TASKS_META_KEY, JSON.stringify(tasks));
+  }
+  async handleTaskWs(sender, data) {
+    const tasks = await this.loadTasksWs();
+    if (data.type === "task_register") {
+      const title = String(data.title || "").trim().slice(0, 120);
+      const detail = String(data.detail || "").trim().slice(0, 500);
+      if (!title) return { type: "error", error: "title 不能为空" };
+      const now = Date.now();
+      const task = {
+        id: newId("t_"), title, detail,
+        agent_id: sender.id, agent_name: sender.name,
+        status: "in_progress", progress: [], created_at: now, updated_at: now,
+      };
+      tasks.push(task);
+      await this.saveTasksWs(tasks);
+      return { type: "task_registered", task_id: task.id, title: task.title, status: task.status };
+    }
+    if (data.type === "task_progress") {
+      const task = tasks.find((t) => t.id === String(data.task_id || ""));
+      if (!task) return { type: "error", error: "任务不存在" };
+      if (task.agent_id !== sender.id) return { type: "error", error: "只能更新自己的任务" };
+      const note = String(data.note || "").trim().slice(0, 500);
+      if (!note) return { type: "error", error: "note 不能为空" };
+      task.progress = task.progress || [];
+      task.progress.push({ note, ts: Date.now() });
+      task.updated_at = Date.now();
+      await this.saveTasksWs(tasks);
+      return { type: "task_progress_ok", task_id: task.id, progress_count: task.progress.length };
+    }
+    if (data.type === "task_done") {
+      const task = tasks.find((t) => t.id === String(data.task_id || ""));
+      if (!task) return { type: "error", error: "任务不存在" };
+      if (task.agent_id !== sender.id) return { type: "error", error: "只能更新自己的任务" };
+      task.status = "done";
+      task.updated_at = Date.now();
+      await this.saveTasksWs(tasks);
+      return { type: "task_done_ok", task_id: task.id, status: task.status };
+    }
+    return { type: "error", error: "未知任务消息" };
+  }
+
   async webSocketMessage(ws, message) {
     try {
       const sender = ws.deserializeAttachment();
@@ -795,6 +860,11 @@ export class ChatRoom {
         if (!this.checkRate(sender.id)) { ws.send(JSON.stringify({ type: "error", error: "发得太快了，10 秒内最多 5 条" })); return; }
         const msg = await this.storeMessage(sender, text, String(data.reply_to || "").slice(0, 40) || null, atts);
         this.broadcast({ type: "message", message: msg, members: await this.presence() });
+        return;
+      }
+      if (data.type === "task_register" || data.type === "task_progress" || data.type === "task_done") {
+        ws.send(JSON.stringify(await this.handleTaskWs(sender, data)));
+        return;
       }
     } catch { /* 坏消息直接丢掉 */ }
   }
@@ -887,6 +957,94 @@ const MOD_NAME = "Moderator";
 const MOD_ID = "u_moderator";
 const NEURON_BUDGET = 2000;
 const NEURON_PER_REPLY = 15;
+
+// ---------- 任务自报 ----------
+// 任务存在注册表 DO 的 meta 里（key=tasks，JSON 数组），保持简单。
+// 任务：{id, title, detail, agent_id, agent_name, status(in_progress|done),
+//        progress:[{note, ts}], created_at, updated_at}。
+// 监督员：每小时最多跑一次；对 in_progress、超 6 小时没进度、建好超 1 小时
+// 的任务（Atlas 除外，自己跟踪自己）在 #general 以 Moderator 身份追问，
+// 每个任务每 6 小时最多追问一次。
+const TASKS_META_KEY = "tasks";
+const TASK_SUPERVISOR_LAST_KEY = "task_supervisor_last";
+const SUPERVISOR_INTERVAL_MS = 60 * 60 * 1000;
+const SUPERVISOR_STALE_MS = 6 * 60 * 60 * 1000;
+const SUPERVISOR_MIN_AGE_MS = 60 * 60 * 1000;
+const SUPERVISOR_NUDGE_COOLDOWN_MS = 6 * 60 * 60 * 1000;
+const ATLAS_ID = "u_902a91ad";
+
+async function loadTasks(env) {
+  const { data } = await regCall(env, "/registry/meta?key=" + TASKS_META_KEY);
+  try {
+    const arr = JSON.parse(data.value || "[]");
+    return Array.isArray(arr) ? arr : [];
+  } catch { return []; }
+}
+async function saveTasks(env, tasks) {
+  await regCall(env, "/registry/meta", { key: TASKS_META_KEY, value: JSON.stringify(tasks) });
+}
+function publicTask(t) {
+  return {
+    id: t.id, title: t.title, detail: t.detail || "",
+    agent: t.agent_name, agent_id: t.agent_id, status: t.status,
+    progress: t.progress || [], created_at: t.created_at, updated_at: t.updated_at,
+  };
+}
+function canEditTask(ident, task) {
+  return !!ident && (ident.role === "owner" || task.agent_id === ident.id);
+}
+function createTaskRecord(ident, title, detail) {
+  const now = Date.now();
+  return {
+    id: newId("t_"), title, detail: detail || "",
+    agent_id: ident.id, agent_name: ident.name,
+    status: "in_progress", progress: [], created_at: now, updated_at: now,
+  };
+}
+
+async function handleTaskSupervisor(env, report, opts) {
+  const now = Date.now();
+  const force = !!(opts && opts.force);
+  try {
+    if (!force) {
+      const lastRow = await regCall(env, "/registry/meta?key=" + TASK_SUPERVISOR_LAST_KEY);
+      const last = parseInt((lastRow.data && lastRow.data.value) || "0", 10) || 0;
+      if (now - last < SUPERVISOR_INTERVAL_MS) {
+        report && report.push("task supervisor: skipped, last run " + new Date(last).toISOString());
+        return { skipped: true };
+      }
+    }
+    await regCall(env, "/registry/meta", { key: TASK_SUPERVISOR_LAST_KEY, value: String(now) });
+    const tasks = await loadTasks(env);
+    const stale = tasks.filter((t) =>
+      t.status === "in_progress" && t.agent_id !== ATLAS_ID &&
+      (now - t.created_at) > SUPERVISOR_MIN_AGE_MS &&
+      (now - t.updated_at) > SUPERVISOR_STALE_MS);
+    report && report.push(`task supervisor: ${tasks.length} tasks, ${stale.length} stale`);
+    let nudged = 0;
+    for (const task of stale) {
+      const nudgeKey = "task_nudged_" + task.id;
+      const nRow = await regCall(env, "/registry/meta?key=" + nudgeKey);
+      const nLast = parseInt((nRow.data && nRow.data.value) || "0", 10) || 0;
+      if (now - nLast < SUPERVISOR_NUDGE_COOLDOWN_MS) {
+        report && report.push(`task supervisor: skip ${task.id}, nudged ${new Date(nLast).toISOString()}`);
+        continue;
+      }
+      await roomStub(env, "general").fetch("https://do/room/send", {
+        method: "POST",
+        headers: { "content-type": "application/json", "x-sender-id": MOD_ID, "x-sender-name": MOD_NAME, "x-sender-type": "bot", "x-sender-platform": "web" },
+        body: JSON.stringify({ text: `@${task.agent_name} ${task.title} 进展怎么样了？` }),
+      });
+      await regCall(env, "/registry/meta", { key: nudgeKey, value: String(now) });
+      nudged++;
+      report && report.push(`task supervisor: nudged ${task.id} (${task.agent_name}：${task.title})`);
+    }
+    return { skipped: false, stale: stale.length, nudged };
+  } catch (e) {
+    report && report.push("task supervisor error: " + (e && e.message ? e.message : String(e)));
+    return { error: String((e && e.message) || e) };
+  }
+}
 
 async function handleModeratorScan(env, report) {
   if (!env.AI) { report && report.push("no AI binding"); return; }
@@ -1795,6 +1953,28 @@ export default {
         await handleModeratorScan(env, report);
         return json({ report });
       }
+      // 手动触发任务监督员（房主调试用；Cron 每 2 分钟跑、监督员每小时最多跑一次）。
+      // 调试用：force=true 跳过 1 小时 guard；debug_age_task_id + debug_age_hours
+      // 可把指定任务的人工时间拨老几小时（用于验证追问逻辑，平时别用）。
+      if (url.pathname === "/api/admin/task-supervisor" && request.method === "POST") {
+        const me = await authIdentity(env, request);
+        const e = needRole(me, ["owner"]);
+        if (e) return e;
+        const body = await bodyJson();
+        if (body.debug_age_task_id && body.debug_age_hours) {
+          const tasks = await loadTasks(env);
+          const t = tasks.find((x) => x.id === String(body.debug_age_task_id));
+          if (t) {
+            const ms = Math.max(0, Math.floor(+body.debug_age_hours || 0)) * 3600 * 1000;
+            t.created_at -= ms;
+            t.updated_at -= ms;
+            await saveTasks(env, tasks);
+          }
+        }
+        const report = [];
+        const result = await handleTaskSupervisor(env, report, { force: !!body.force });
+        return json({ report, result });
+      }
       // ---- 微信绑定 ----
       if (url.pathname === "/api/admin/wechat-bind-code" && request.method === "POST") {
         const me = await authIdentity(env, request);
@@ -1996,6 +2176,71 @@ export default {
         };
         const decision = evaluateRules(ident.rules, msg, { id: ident.id, name: ident.name });
         return json({ ...decision, platform: body.platform || "", cooldown_seconds: (ident.rules || {}).cooldown_seconds ?? 30, you: ident.name });
+      }
+      // ---- 任务自报（agent 自己登记任务、更新进度）----
+      // 任务存在注册表 DO meta（key=tasks）。只能操作自己的任务，房主除外。
+      if (url.pathname === "/api/tasks" && request.method === "GET") {
+        const me = await authIdentity(env, request);
+        if (!me) return err("需要 Bearer token", 401);
+        const tasks = await loadTasks(env);
+        const status = url.searchParams.get("status") || "";
+        const list = status ? tasks.filter((t) => t.status === status) : tasks;
+        return json({ tasks: list.map(publicTask) });
+      }
+      if (url.pathname === "/api/tasks/register" && request.method === "POST") {
+        const me = await authIdentity(env, request);
+        if (!me) return err("需要 Bearer token", 401);
+        const body = await bodyJson();
+        const title = String(body.title || "").trim().slice(0, 120);
+        const detail = String(body.detail || "").trim().slice(0, 500);
+        if (!title) return err("title 不能为空", 400);
+        const tasks = await loadTasks(env);
+        const task = createTaskRecord(me, title, detail);
+        tasks.push(task);
+        await saveTasks(env, tasks);
+        return json({ id: task.id, title: task.title, status: task.status });
+      }
+      const taskProgressMatch = url.pathname.match(/^\/api\/tasks\/([A-Za-z0-9_-]+)\/progress$/);
+      if (taskProgressMatch && request.method === "POST") {
+        const me = await authIdentity(env, request);
+        if (!me) return err("需要 Bearer token", 401);
+        const body = await bodyJson();
+        const note = String(body.note || "").trim().slice(0, 500);
+        if (!note) return err("note 不能为空", 400);
+        const tasks = await loadTasks(env);
+        const task = tasks.find((t) => t.id === taskProgressMatch[1]);
+        if (!task) return err("任务不存在", 404);
+        if (!canEditTask(me, task)) return err("只能更新自己的任务", 403);
+        task.progress = task.progress || [];
+        task.progress.push({ note, ts: Date.now() });
+        task.updated_at = Date.now();
+        await saveTasks(env, tasks);
+        return json({ ok: true, id: task.id, status: task.status, progress_count: task.progress.length });
+      }
+      const taskDoneMatch = url.pathname.match(/^\/api\/tasks\/([A-Za-z0-9_-]+)\/done$/);
+      if (taskDoneMatch && request.method === "POST") {
+        const me = await authIdentity(env, request);
+        if (!me) return err("需要 Bearer token", 401);
+        const tasks = await loadTasks(env);
+        const task = tasks.find((t) => t.id === taskDoneMatch[1]);
+        if (!task) return err("任务不存在", 404);
+        if (!canEditTask(me, task)) return err("只能更新自己的任务", 403);
+        task.status = "done";
+        task.updated_at = Date.now();
+        await saveTasks(env, tasks);
+        return json({ ok: true, id: task.id, status: task.status });
+      }
+      const taskDeleteMatch = url.pathname.match(/^\/api\/tasks\/([A-Za-z0-9_-]+)$/);
+      if (taskDeleteMatch && request.method === "DELETE") {
+        const me = await authIdentity(env, request);
+        if (!me) return err("需要 Bearer token", 401);
+        const tasks = await loadTasks(env);
+        const idx = tasks.findIndex((t) => t.id === taskDeleteMatch[1]);
+        if (idx < 0) return err("任务不存在", 404);
+        if (!canEditTask(me, tasks[idx])) return err("只能删除自己的任务", 403);
+        tasks.splice(idx, 1);
+        await saveTasks(env, tasks);
+        return json({ ok: true, id: taskDeleteMatch[1] });
       }
       // ---- 房间消息 / 桥接 / WS ----
       const m = url.pathname.match(/^\/api\/rooms\/([a-z0-9-]+)\/(messages|ws|delete|bridge-message)$/);
@@ -2333,6 +2578,9 @@ export default {
     // 手动拉取仍可用 /api/bridge/test-cron（桥 Token 鉴权）。
     if (controller.cron === "*/2 * * * *") {
       ctx.waitUntil(handleModeratorScan(env));
+      // 任务监督员：每 2 分钟触发一次，内部用 meta 记上次运行时间，
+      // 不到 1 小时不重复跑（见 handleTaskSupervisor）。
+      ctx.waitUntil(handleTaskSupervisor(env));
     } else {
       console.log(JSON.stringify({ cron: "ignored", expression: controller.cron }));
     }

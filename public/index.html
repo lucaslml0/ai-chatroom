@@ -791,6 +791,13 @@ function renderMobileTabBadges(){
   if(wb){const n=wbBoard?wbCounts(wbBoard).in_progress:0;wb.textContent=n>0?n:"";wb.style.display=n>0?"inline-block":"none";}
   if(ab){const n=abBoard?abCounts(abBoard).pendingTotal:0;ab.textContent=n>0?n:"";ab.style.display=n>0?"inline-block":"none";}
 }
+// 切回聊天 tab 时滚到底部：切到工作台/审批时聊天区 display:none，
+// 这期间新消息的 renderMsg 滚到底会失效（隐藏元素 scrollHeight 为 0），
+// 切回来时必须补一次，否则用户看到的是旧消息、以为最新消息没来。
+function scrollMsgsToBottom(){
+  const b=$("#msgs");if(!b)return;
+  requestAnimationFrame(()=>{b.scrollTop=b.scrollHeight;});
+}
 function setMobileTab(tab){
   mobileTab=tab;
   document.body.dataset.mobiletab=tab;
@@ -808,6 +815,7 @@ function setMobileTab(tab){
   }else{
     closeWorkbenchFloat();
     closeApprovalModal();
+    scrollMsgsToBottom();
   }
 }
 function openWorkbenchFloat(){
@@ -1579,6 +1587,13 @@ curl -X POST ${api}/api/evaluate \\
   if(matchMedia("(max-width:900px)").matches)$("#input").placeholder="输入消息，@名字 提及某人…";
   document.querySelectorAll("#mobiletabs button").forEach(b=>{b.onclick=()=>setMobileTab(b.dataset.tab);});
   window.addEventListener("resize",updateMobileTabTop);
+  // 图片/视频加载完撑高消息时，若用户本来就在底部附近，补滚到底部
+  $("#msgs").addEventListener("load",e=>{
+    if(e.target&&(e.target.tagName==="IMG"||e.target.tagName==="VIDEO")){
+      const b=$("#msgs");
+      if(b.scrollHeight-b.scrollTop-b.clientHeight<200){b.scrollTop=b.scrollHeight;}
+    }
+  },true);
   $("#wbentry").onclick=()=>{if(isMobile()){setMobileTab(mobileTab==="workbench"?"chat":"workbench");}else{toggleWorkbenchFloat();}};
   $("#wbclose").onclick=()=>{if(isMobile()&&mobileTab==="workbench"){setMobileTab("chat");}else{closeWorkbenchFloat();}};
   $("#wbmin").onclick=minimizeWorkbenchFloat;
