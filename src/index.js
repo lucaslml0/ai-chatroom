@@ -2544,25 +2544,6 @@ export default {
         try { board = JSON.parse(data.value); } catch { return json({ board: null, updated_at: null }); }
         return json({ board, updated_at: board.updated_at || null });
       }
-      // ---- Agent 审批看板快照（审批入口用；快照由同步任务每 5 分钟推送）----
-      if (url.pathname === "/api/approval-board" && request.method === "POST") {
-        const me = await authIdentity(env, request);
-        if (!me) return err("需要 Bearer token", 401);
-        const body = await bodyJson();
-        if (!body || typeof body !== "object" || !Array.isArray(body.pending)) return err("快照里要有 pending 数组", 400);
-        const snapshot = { ...body, updated_at: body.updated_at || new Date().toISOString() };
-        await regCall(env, "/registry/meta", { key: "approval_board", value: JSON.stringify(snapshot) });
-        return json({ ok: true, updated_at: snapshot.updated_at });
-      }
-      if (url.pathname === "/api/approval-board" && request.method === "GET") {
-        const me = await authIdentity(env, request);
-        if (!me) return err("需要 Bearer token", 401);
-        const { data } = await regCall(env, "/registry/meta?key=approval_board");
-        if (!data || !data.value) return json({ board: null, updated_at: null });
-        let board = null;
-        try { board = JSON.parse(data.value); } catch { return json({ board: null, updated_at: null }); }
-        return json({ board, updated_at: board.updated_at || null });
-      }
       if (url.pathname.startsWith("/api/")) return err("unknown api", 404);
       if (env.ASSETS) return env.ASSETS.fetch(request);
       return new Response("ai-chatroom", { headers: { "content-type": "text/plain" } });

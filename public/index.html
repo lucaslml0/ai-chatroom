@@ -131,33 +131,6 @@ pre{background:#10131a;border:1px solid var(--line);border-radius:8px;padding:10
 .wb-stations{display:flex;gap:6px;flex-wrap:wrap;margin-top:6px}
 .wb-station{font-size:12px;border:1px solid var(--line);border-radius:20px;padding:2px 10px}
 .wb-station.busy{border-color:#ffb74d;color:#ffcc80}
-/* Agent 审批看板入口 + 弹窗（与 3D 工作台入口同款式） */
-#abentry{border:1px solid var(--line);border-radius:10px;padding:10px 12px;margin-top:10px;background:var(--panel);cursor:pointer}
-#abentry:hover{border-color:var(--acc)}
-#abentry.has-pending{border-color:#ffb74d}
-.ab-head{display:flex;align-items:center;gap:8px;font-weight:700;font-size:14px}
-.ab-pulse{width:9px;height:9px;border-radius:50%;background:#3ecf8e;flex:none}
-.ab-pulse.on{background:#ffb74d;animation:wb-pulse 2s ease-in-out infinite}
-.ab-counts{display:flex;gap:10px;flex-wrap:wrap;font-size:13px;color:var(--dim);margin-top:6px}
-.ab-counts b{color:var(--txt);font-size:15px}
-#abupdated{margin-top:6px}
-#abmodal{position:fixed;inset:0;z-index:80;display:none}
-#abmodal.open{display:block}
-.ab-modal-backdrop{position:absolute;inset:0;background:rgba(0,0,0,.6)}
-.ab-modal{position:relative;max-width:min(92vw,720px);max-height:86vh;margin:6vh auto 0;background:var(--bg);border:1px solid var(--line);border-radius:12px;padding:16px;overflow-y:auto}
-.ab-modal-head{display:flex;align-items:center;justify-content:space-between;gap:10px}
-.ab-modal-head h3{margin:0;font-size:17px}
-.ab-stats{display:flex;gap:14px;flex-wrap:wrap;font-size:13px;color:var(--dim);margin:10px 0}
-.ab-stats b{color:var(--txt);font-size:15px}
-.ab-group{margin-top:14px}
-.ab-group h4{margin:0 0 6px;font-size:14px}
-.ab-item{border:1px solid var(--line);border-radius:8px;padding:8px 10px;margin-bottom:6px;background:var(--panel);font-size:14px}
-.ab-item .ab-meta{font-size:12px;color:var(--dim);margin-top:2px}
-.ab-item .ab-detail{font-size:13px;color:var(--txt);margin-top:4px}
-.ab-empty{color:var(--dim);font-size:13px;padding:4px 0}
-.ab-risk-high{color:#ff8a80}
-.ab-risk-medium{color:#ffcc80}
-.ab-risk-low{color:#9aa3b2}
 @media(max-width:900px){
   /* 手机：定高应用壳（100dvh 纵向 flex），聊天区 flex:1 占主体；
      房间改横向可滑 chips，成员默认收起，右侧面板变右侧抽屉；
@@ -197,24 +170,19 @@ pre{background:#10131a;border:1px solid var(--line);border-radius:8px;padding:10
   #composer{padding:10px 12px calc(10px + env(safe-area-inset-bottom,0px));gap:8px}
   #composer textarea{flex:1;min-width:0;resize:none;max-height:120px}
   #composer button{flex:none}
-  /* 手机 tab 页：聊天 / 工作台 / 审批 三页切换，工作台与审批不再悬浮盖住聊天 */
+  /* 手机 tab 页：聊天 / 工作台两页切换，工作台不再悬浮盖住聊天 */
   header{position:relative;z-index:50}
   #mobiletabs{display:flex;flex:none;border-bottom:1px solid var(--line);background:var(--bg);position:relative;z-index:50}
   #mobiletabs button{flex:1;border:none;border-radius:0;background:transparent;padding:10px 4px;font-size:14px;color:var(--dim);border-bottom:2px solid transparent}
   #mobiletabs button.on{color:var(--txt);border-bottom-color:var(--acc);font-weight:700}
   .tab-badge{display:none;min-width:18px;height:18px;line-height:18px;text-align:center;border-radius:9px;background:#c0392b;color:#fff;font-size:11px;font-weight:700;padding:0 5px;margin-left:4px;vertical-align:1px}
   body[data-mobiletab="workbench"] main>aside,body[data-mobiletab="workbench"] section#chat{display:none}
-  body[data-mobiletab="approval"] main>aside,body[data-mobiletab="approval"] section#chat{display:none}
   body[data-mobiletab="workbench"] #wbfloat{display:flex;flex-direction:column;position:fixed;left:0;right:0;top:var(--mtop,96px);bottom:0;width:auto;max-width:none;border:none;border-radius:0;box-shadow:none;z-index:45}
   body[data-mobiletab="workbench"] .wb-float-head{flex:none;cursor:default}
   body[data-mobiletab="workbench"] #wbfloatbody{flex:1;min-height:0;overflow-y:auto}
   body[data-mobiletab="workbench"] #wb3d{height:38vh}
   body[data-mobiletab="workbench"] #wbmin{display:none}
-  body[data-mobiletab="approval"] #abmodal{display:block;position:fixed;left:0;right:0;top:var(--mtop,96px);bottom:0;z-index:45}
-  body[data-mobiletab="approval"] .ab-modal-backdrop{display:none}
-  body[data-mobiletab="approval"] .ab-modal{max-width:none;max-height:none;height:100%;margin:0;border:none;border-radius:0;padding:14px;overflow-y:auto}
-  /* 手机聊天页：审批看板入口整块去掉；工作台入口只剩工位状态灯，不留文字 */
-  #abentry{display:none}
+  /* 手机聊天页：工作台入口只剩工位状态灯，不留文字 */
   #wbentry{margin-top:8px;padding:6px 12px}
   #wbentry .wb-head,#wbentry .wb-counts,#wbentry #wbupdated{display:none}
   #wbentry .wb-dots{margin-top:0}
@@ -232,7 +200,6 @@ pre{background:#10131a;border:1px solid var(--line);border-radius:8px;padding:10
 <nav id="mobiletabs" aria-label="页面切换">
   <button data-tab="chat" class="on">💬 聊天</button>
   <button data-tab="workbench">🧑‍💼 工作台<span class="tab-badge" style="display:none"></span></button>
-  <button data-tab="approval">🛡 审批<span class="tab-badge" style="display:none"></span></button>
 </nav>
 <main>
   <aside>
@@ -255,11 +222,6 @@ pre{background:#10131a;border:1px solid var(--line);border-radius:8px;padding:10
       <div class="wb-counts"><span>待认领 <b id="wb-waiting">—</b></span><span>进行中 <b id="wb-progress">—</b></span><span>已完成 <b id="wb-done">—</b></span></div>
       <div class="wb-dots" id="wbdots"></div>
       <div class="note" id="wbupdated">加入后自动同步任务板</div>
-    </div>
-    <div id="abentry" title="点开放大查看 Agent 审批看板">
-      <div class="ab-head"><span>🛡 Agent 审批看板</span><span class="ab-pulse" id="abpulse"></span></div>
-      <div class="ab-counts"><span>待审批 <b id="ab-pending">—</b></span><span>待选择 <b id="ab-choice">—</b></span><span>已处理 <b id="ab-resolved">—</b></span></div>
-      <div class="note" id="abupdated">加入后自动同步审批看板</div>
     </div>
   </aside>
 
@@ -395,13 +357,6 @@ pre{background:#10131a;border:1px solid var(--line);border-radius:8px;padding:10
   <div id="wbfloatbody">
     <div id="wb3d"><div class="wb3d-hint">拖拽旋转 · 双指缩放 · 点工位查看</div><div class="wb3d-zoom"><button id="wbzoomin" title="放大">＋</button><button id="wbzoomout" title="缩小">－</button></div></div>
     <div id="wbfloatsummary"></div>
-  </div>
-</div>
-<div id="abmodal" aria-hidden="true">
-  <div class="ab-modal-backdrop" id="abbackdrop"></div>
-  <div class="ab-modal">
-    <div class="ab-modal-head"><h3>🛡 Agent 审批看板</h3><button id="abclose">✕ 关闭</button></div>
-    <div id="abmodalbody"></div>
   </div>
 </div>
 <script>
@@ -787,11 +742,9 @@ function updateMobileTabTop(){
 }
 function renderMobileTabBadges(){
   const wb=document.querySelector('#mobiletabs button[data-tab="workbench"] .tab-badge');
-  const ab=document.querySelector('#mobiletabs button[data-tab="approval"] .tab-badge');
   if(wb){const n=wbBoard?wbCounts(wbBoard).in_progress:0;wb.textContent=n>0?n:"";wb.style.display=n>0?"inline-block":"none";}
-  if(ab){const n=abBoard?abCounts(abBoard).pendingTotal:0;ab.textContent=n>0?n:"";ab.style.display=n>0?"inline-block":"none";}
 }
-// 切回聊天 tab 时滚到底部：切到工作台/审批时聊天区 display:none，
+// 切回聊天 tab 时滚到底部：切到工作台时聊天区 display:none，
 // 这期间新消息的 renderMsg 滚到底会失效（隐藏元素 scrollHeight 为 0），
 // 切回来时必须补一次，否则用户看到的是旧消息、以为最新消息没来。
 function scrollMsgsToBottom(){
@@ -805,16 +758,11 @@ function setMobileTab(tab){
   updateMobileTabTop();
   if(!isMobile())return;
   if(tab==="workbench"){
-    closeApprovalModal();
     const f=$("#wbfloat");if(f){f.style.left="";f.style.top="";f.style.right="";}
     openWorkbenchFloat();
     requestAnimationFrame(()=>{if(wb3d&&wb3d.resize)wb3d.resize();});
-  }else if(tab==="approval"){
-    closeWorkbenchFloat();
-    openApprovalModal();
   }else{
     closeWorkbenchFloat();
-    closeApprovalModal();
     scrollMsgsToBottom();
   }
 }
@@ -1099,121 +1047,6 @@ function initWorkbenchFloatDrag(){
   head.addEventListener("pointerup",end);
   head.addEventListener("pointercancel",end);
 }
-// ---- Agent 审批看板入口（小动态图 + 点开放大看完整看板）----
-// 快照由同步任务每 5 分钟推到 /api/approval-board；这里只读不写。
-// 审批在主聊卡片上点，房里只看不批。
-let abBoard=null,abUpdatedAt=null;
-function abIsChoice(item){
-  if(!item)return false;
-  if(item.status==="choice"||item.kind==="choice"||item.type==="choice")return true;
-  if(Array.isArray(item.options)&&item.options.length)return true;
-  return false;
-}
-function abStatusLabel(item){
-  if(!item)return"待处理";
-  const s=String(item.status||"");
-  if(s==="choice"||abIsChoice(item))return"待选择";
-  if(s==="pending")return"待审批";
-  if(s==="approved")return"已通过";
-  if(s==="rejected")return"已拒绝";
-  if(s==="resolved")return"已处理";
-  return"待处理";
-}
-function abRiskLabel(r){
-  const x=String(r||"").toLowerCase();
-  if(x==="high")return"高";
-  if(x==="medium")return"中";
-  if(x==="low")return"低";
-  return r||"—";
-}
-function abRiskClass(r){
-  const x=String(r||"").toLowerCase();
-  if(x==="high")return"ab-risk-high";
-  if(x==="medium")return"ab-risk-medium";
-  return"ab-risk-low";
-}
-function abDeadline(item){
-  return item.expiresAt||item.expires_at||item.deadline||item.dueAt||item.due_at||null;
-}
-function abCounts(board){
-  const pending=(board&&board.pending)||[];
-  const history=(board&&board.history)||[];
-  let choice=0,approval=0;
-  pending.forEach(it=>{if(abIsChoice(it))choice++;else approval++;});
-  const high=(board&&typeof board.highRiskCount==="number")?board.highRiskCount:pending.concat(history).filter(x=>String(x.riskLevel||x.risk_level||"").toLowerCase()==="high").length;
-  return{approval,choice,resolved:history.length,high,pendingTotal:pending.length};
-}
-function renderApprovalEntry(){
-  const p=$("#ab-pending"),c=$("#ab-choice"),r=$("#ab-resolved"),pulse=$("#abpulse"),up=$("#abupdated");
-  if(!p)return;
-  if(!abBoard){
-    p.textContent="—";c.textContent="—";r.textContent="—";
-    pulse.classList.remove("on");
-    up.textContent="暂无审批快照，稍后再看";
-    return;
-  }
-  const n=abCounts(abBoard);
-  p.textContent=n.approval;c.textContent=n.choice;r.textContent=n.resolved;
-  pulse.classList.toggle("on",n.pendingTotal>0);
-  document.getElementById("abentry").classList.toggle("has-pending",n.pendingTotal>0);
-  up.textContent=abUpdatedAt?("同步于 "+wbTimeStr(abUpdatedAt)):"已同步";
-}
-function abItemHtml(it){
-  const src=wbSourceId(it.detail);
-  const dl=abDeadline(it);
-  const opts=Array.isArray(it.options)?it.options:null;
-  const risk=it.riskLevel||it.risk_level||"";
-  const metaParts=[
-    "申请人："+esc(it.requester||"—"),
-    "申请于 "+wbTimeStr(it.requestedAt||it.requested_at||""),
-    dl?("截止 "+wbTimeStr(dl)):"",
-    "风险 <span class='"+abRiskClass(risk)+"'>"+esc(abRiskLabel(risk))+"</span>",
-    src?("来源房消息 "+esc(src)):"",
-    it.code?("编号 "+esc(String(it.code).slice(0,13)+"…")):"",
-  ].filter(Boolean);
-  const optHtml=opts?`<div class="ab-detail">选项：${opts.map(o=>esc(typeof o==="string"?o:(o.label||o.title||JSON.stringify(o)))).join(" / ")}</div>`:"";
-  return `<div class="ab-item"><div><b>${esc(it.title||"")}</b> <span class="ab-meta">（${esc(abStatusLabel(it))}）</span></div>
-    <div class="ab-meta">影响：${esc(it.permission||it.permission_scope||"—")}</div>
-    ${it.detail?`<div class="ab-detail">${esc(it.detail)}</div>`:""}
-    ${optHtml}
-    <div class="ab-meta">${metaParts.join(" · ")}</div></div>`;
-}
-function renderApprovalModal(){
-  const body=$("#abmodalbody");if(!body)return;
-  if(!abBoard){
-    body.innerHTML=`<p style="color:var(--dim)">暂无审批快照，稍后再看。同步任务每 5 分钟把 Agent 审批看板的收件箱推过来。审批在主聊卡片上点，房里只看不批。</p>`;
-    return;
-  }
-  const n=abCounts(abBoard);
-  const pending=abBoard.pending||[];
-  const history=abBoard.history||[];
-  const pendHtml=pending.length?pending.map(abItemHtml).join(""):`<div class="ab-empty">没有待处理事项。</div>`;
-  const histHtml=history.length?history.map(it=>{
-    const risk=it.riskLevel||it.risk_level||"";
-    return `<div class="ab-item"><div><b>${esc(it.title||"")}</b> <span class="ab-meta">（${esc(abStatusLabel(it))}）</span></div>
-      <div class="ab-meta">影响：${esc(it.permission||it.permission_scope||"—")}</div>
-      <div class="ab-meta">申请人：${esc(it.requester||"—")} · 申请于 ${wbTimeStr(it.requestedAt||it.requested_at||"")} · 处理于 ${wbTimeStr(it.resolvedAt||it.resolved_at||"")} · 风险 <span class="${abRiskClass(risk)}">${esc(abRiskLabel(risk))}</span></div></div>`;
-  }).join(""):`<div class="ab-empty">还没有已处理记录。</div>`;
-  body.innerHTML=`
-    <div class="ab-stats"><span>待审批 <b>${n.approval}</b></span><span>待选择 <b>${n.choice}</b></span><span>已处理 <b>${n.resolved}</b></span><span>高风险 <b>${n.high}</b></span><span>${abUpdatedAt?("同步于 "+wbTimeStr(abUpdatedAt)):""}</span></div>
-    <p class="note">审批在主聊卡片上点，房里只看不批。</p>
-    <div class="ab-group"><h4>待处理（${n.pendingTotal}）</h4>${pendHtml}</div>
-    <div class="ab-group"><h4>已处理历史（${n.resolved}）</h4>${histHtml}</div>`;
-}
-function openApprovalModal(){renderApprovalModal();const m=$("#abmodal");m.classList.add("open");m.setAttribute("aria-hidden","false");}
-function closeApprovalModal(){const m=$("#abmodal");m.classList.remove("open");m.setAttribute("aria-hidden","true");}
-async function loadApprovalBoard(){
-  if(!me||!me.token)return;
-  try{
-    const r=await fetch(api+"/api/approval-board",{headers:authHeaders()});
-    const d=await r.json();
-    if(d.error)return;
-    abBoard=d.board||null;abUpdatedAt=d.updated_at||null;
-    renderApprovalEntry();
-    renderMobileTabBadges();
-    if(document.getElementById("abmodal").classList.contains("open"))renderApprovalModal();
-  }catch{}
-}
 async function loadAdmin(){
   if(!me||(me.role!=="owner"&&me.role!=="moderator"))return;
   try{
@@ -1377,7 +1210,7 @@ async function joinWithToken(token){
   if(me.role==="owner"||me.role==="moderator"){$("#admin").style.display="block";loadAdmin();}
   if(me.role==="owner")$("#roomcreate").style.display="block";
   if(me.role!=="owner"){$("#mybridge").style.display="block";loadMyBridge();}
-  updateWhoami();updateApiCode();connect();loadAgents();loadWorkbenchBoard();loadApprovalBoard();checkFileStatus();
+  updateWhoami();updateApiCode();connect();loadAgents();loadWorkbenchBoard();checkFileStatus();
   return true;
 }
 $("#join").onclick=async()=>{
@@ -1602,11 +1435,8 @@ curl -X POST ${api}/api/evaluate \\
   $("#wbzoomout").onclick=()=>{if(wb3d&&wb3d.orbit){wb3d.orbit.radius=Math.min(20,wb3d.orbit.radius+1.5);wb3d.orbit.auto=false;wb3d.applyCamera();}};
   initWorkbenchFloatDrag();
   if(isMobile()){setMobileTab("chat");}else{openWorkbenchFloat();}
-  $("#abentry").onclick=()=>{if(isMobile()){setMobileTab(mobileTab==="approval"?"chat":"approval");}else{openApprovalModal();}};
-  $("#abclose").onclick=()=>{if(isMobile()&&mobileTab==="approval"){setMobileTab("chat");}else{closeApprovalModal();}};
-  $("#abbackdrop").onclick=closeApprovalModal;
-  document.addEventListener("keydown",e=>{if(e.key==="Escape"){if(isMobile()&&(mobileTab==="workbench"||mobileTab==="approval")){setMobileTab("chat");}else{closeWorkbenchFloat();closeApprovalModal();}}});
-  setInterval(()=>{loadWorkbenchBoard();loadApprovalBoard();},60000);
+  document.addEventListener("keydown",e=>{if(e.key==="Escape"){if(isMobile()&&mobileTab==="workbench"){setMobileTab("chat");}else{closeWorkbenchFloat();}}});
+  setInterval(()=>{loadWorkbenchBoard();},60000);
 })();
 // 手机：抽屉与成员开关
 $("#menubtn").onclick=()=>document.body.classList.add("panel-open");
