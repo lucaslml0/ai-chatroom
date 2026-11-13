@@ -22,9 +22,12 @@ header .sub{color:var(--dim);font-size:13px}
 #status.on .dot{background:#3ecf8e}
 main{flex:1;min-height:0;display:grid;grid-template-columns:210px 1fr 320px}
 aside{border-right:1px solid var(--line);padding:12px;overflow:auto;min-height:0}
-#rooms button{display:block;width:100%;text-align:left;margin-bottom:8px;background:transparent}
+#roombar{display:flex;gap:8px;align-items:flex-start;padding:8px 16px;border-bottom:1px solid var(--line);flex:none;flex-wrap:wrap}
+#roomtoggle{flex:none;white-space:nowrap}
+#rooms{display:flex;gap:6px;flex-wrap:wrap;flex:1;min-width:0}
+#rooms.collapsed{display:none}
+#rooms button{width:auto;margin-bottom:0;padding:6px 12px;white-space:nowrap;background:transparent}
 #rooms button.active{background:var(--panel2);border-color:var(--acc)}
-#rooms small{display:block;color:var(--dim);font-size:12px;white-space:normal}
 #members{margin-top:18px;font-size:14px}
 #members h4{margin:0 0 6px;font-size:15px;color:var(--txt);display:flex;align-items:center;gap:7px}
 #members h4 .dot{display:inline-block;width:10px;height:10px;border-radius:50%;background:#3ecf8e;flex:none}
@@ -141,12 +144,12 @@ pre{background:#10131a;border:1px solid var(--line);border-radius:8px;padding:10
   #status{font-size:12px;white-space:nowrap}
   #menubtn{display:inline-flex;align-items:center;justify-content:center;padding:6px 10px;flex:none}
   main{display:flex;flex-direction:column}
-  /* 左栏只剩房间横滑条 + 成员开关；成员/说明/图例默认收起 */
+  /* 左栏只剩成员开关；成员/说明/图例默认收起；房间列表已移到顶部 #roombar */
   aside{order:1;flex:none;max-height:none;overflow:visible;padding:8px 12px 0;border-right:none;border-bottom:1px solid var(--line)}
-  #rooms{display:flex;gap:6px;overflow-x:auto;padding-bottom:8px;scrollbar-width:none}
+  #roombar{padding:8px 12px}
+  #rooms{flex-wrap:nowrap;overflow-x:auto;padding-bottom:2px;scrollbar-width:none}
   #rooms::-webkit-scrollbar{display:none}
-  #rooms button{flex:none;width:auto;margin-bottom:0;padding:6px 12px;white-space:nowrap}
-  #rooms small{display:none}
+  #rooms button{flex:none}
   #roomcreate{display:none!important}
   #members,aside>.note,aside>.legend{display:none}
   #mobilebar{display:flex;padding:0 0 8px}
@@ -201,9 +204,12 @@ pre{background:#10131a;border:1px solid var(--line);border-radius:8px;padding:10
   <button data-tab="chat" class="on">💬 聊天</button>
   <button data-tab="workbench">🧑‍💼 工作台<span class="tab-badge" style="display:none"></span></button>
 </nav>
+<div id="roombar">
+  <button id="roomtoggle" aria-expanded="false" aria-controls="rooms">房间 ▾</button>
+  <div id="rooms" class="collapsed"></div>
+</div>
 <main>
   <aside>
-    <div id="rooms"></div>
     <div id="mobilebar"><button id="membertoggle">👥 在线 <span id="membercount2">—</span> ▾</button></div>
     <div id="roomcreate" style="display:none">
       <label>新建房间（仅房主）</label>
@@ -418,12 +424,20 @@ function authHeaders(){
 }
 async function loadRooms(){
   const r=await fetch(api+"/api/rooms");const d=await r.json();rooms=d.rooms||[];
-  $("#rooms").innerHTML=rooms.map(x=>`<button data-slug="${esc(x.slug)}" class="${x.slug===room?"active":""}"># ${esc(x.name)}<small>${esc(x.topic||"")}</small></button>`).join("");
+  $("#rooms").innerHTML=rooms.map(x=>`<button data-slug="${esc(x.slug)}" class="${x.slug===room?"active":""}"># ${esc(x.name)}</button>`).join("");
   document.querySelectorAll("#rooms button").forEach(b=>b.onclick=()=>switchRoom(b.dataset.slug));
-  document.querySelector("#rooms button.active")?.scrollIntoView({inline:"center",block:"nearest"});
   const cur=rooms.find(x=>x.slug===room);$("#topic").textContent=cur?("# "+cur.name+" — "+(cur.topic||"")):"";
+  updateRoomToggle();
+  if(!$("#rooms").classList.contains("collapsed"))document.querySelector("#rooms button.active")?.scrollIntoView({inline:"center",block:"nearest"});
 }
-function switchRoom(slug){room=slug;msgs.clear();viewCleared=false;$("#msgs").innerHTML="";pendingAtts=[];renderAttachbar();loadRooms();connect();}
+function updateRoomToggle(){
+  const cur=rooms.find(x=>x.slug===room);
+  const collapsed=$("#rooms").classList.contains("collapsed");
+  $("#roomtoggle").textContent=cur?("# "+cur.name+(collapsed?" ▾":" ▴")):"房间 ▾";
+  $("#roomtoggle").setAttribute("aria-expanded",String(!collapsed));
+}
+$("#roomtoggle").onclick=()=>{$("#rooms").classList.toggle("collapsed");updateRoomToggle();};
+function switchRoom(slug){room=slug;msgs.clear();viewCleared=false;$("#msgs").innerHTML="";pendingAtts=[];renderAttachbar();$("#rooms").classList.add("collapsed");loadRooms();connect();}
 function applyFilter(){
   document.querySelectorAll("#msgs .msg").forEach(el=>{
     const m=msgs.get(el.dataset.id);
