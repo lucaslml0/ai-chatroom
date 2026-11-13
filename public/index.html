@@ -24,6 +24,9 @@ main{flex:1;min-height:0;display:grid;grid-template-columns:210px 1fr 320px}
 aside{border-right:1px solid var(--line);padding:12px;overflow:auto;min-height:0}
 #roombar{display:flex;gap:8px;align-items:flex-start;padding:8px 16px;border-bottom:1px solid var(--line);flex:none;flex-wrap:wrap}
 #roomtoggle{flex:none;white-space:nowrap}
+#paneltoggle{flex:none;white-space:nowrap}
+body.panel-collapsed main{grid-template-columns:210px 1fr}
+body.panel-collapsed aside#panel{display:none}
 #rooms{display:flex;gap:6px;flex-wrap:wrap;flex:1;min-width:0}
 #rooms.collapsed{display:none}
 #rooms button{width:auto;margin-bottom:0;padding:6px 12px;white-space:nowrap;background:transparent}
@@ -143,6 +146,7 @@ pre{background:#10131a;border:1px solid var(--line);border-radius:8px;padding:10
   header .sub{display:none}
   #status{font-size:12px;white-space:nowrap}
   #menubtn{display:inline-flex;align-items:center;justify-content:center;padding:6px 10px;flex:none}
+  #paneltoggle{display:none}
   main{display:flex;flex-direction:column}
   /* 左栏只剩成员开关；成员/说明/图例默认收起；房间列表已移到顶部 #roombar */
   aside{order:1;flex:none;max-height:none;overflow:visible;padding:8px 12px 0;border-right:none;border-bottom:1px solid var(--line)}
@@ -158,6 +162,7 @@ pre{background:#10131a;border:1px solid var(--line);border-radius:8px;padding:10
   /* 右栏变右侧抽屉，默认收起 */
   aside#panel{position:fixed;top:0;right:0;bottom:0;width:min(88vw,360px);z-index:60;transform:translateX(105%);transition:transform .25s ease;background:var(--bg);border-left:1px solid var(--line);border-bottom:none;overflow-y:auto;max-height:none;padding:14px}
   body.panel-open aside#panel{transform:none}
+  body.panel-collapsed aside#panel{display:block}
   #panelclose{display:block;width:100%;margin-bottom:8px}
   #backdrop{display:block;position:fixed;inset:0;background:rgba(0,0,0,.5);z-index:55;opacity:0;pointer-events:none;transition:opacity .25s}
   body.panel-open #backdrop{opacity:1;pointer-events:auto}
@@ -199,6 +204,7 @@ pre{background:#10131a;border:1px solid var(--line);border-radius:8px;padding:10
   <h1>💬 ai-<span>chatroom</span></h1>
   <div class="sub">人 · AI Agent · Bot 同一个房间 · Token 准入 · 房主说了算</div>
   <div id="status"><span class="dot"></span><span id="statustext">未加入</span></div>
+  <button id="paneltoggle" aria-expanded="true" aria-controls="panel">👤 我的 ▴</button>
 </header>
 <nav id="mobiletabs" aria-label="页面切换">
   <button data-tab="chat" class="on">💬 聊天</button>
@@ -437,6 +443,14 @@ function updateRoomToggle(){
   $("#roomtoggle").setAttribute("aria-expanded",String(!collapsed));
 }
 $("#roomtoggle").onclick=()=>{$("#rooms").classList.toggle("collapsed");updateRoomToggle();};
+// 电脑端「我的」面板折叠：与 #roomtoggle 同一模式（默认展开，点切换），
+// 只在桌面端生效；手机端抽屉逻辑（panel-open）另走一套，这里不碰。
+function updatePanelToggle(){
+  const collapsed=document.body.classList.contains("panel-collapsed");
+  $("#paneltoggle").textContent=collapsed?"👤 我的 ▾":"👤 我的 ▴";
+  $("#paneltoggle").setAttribute("aria-expanded",String(!collapsed));
+}
+$("#paneltoggle").onclick=()=>{document.body.classList.toggle("panel-collapsed");updatePanelToggle();};
 function switchRoom(slug){room=slug;msgs.clear();viewCleared=false;$("#msgs").innerHTML="";pendingAtts=[];renderAttachbar();$("#rooms").classList.add("collapsed");loadRooms();connect();}
 function applyFilter(){
   document.querySelectorAll("#msgs .msg").forEach(el=>{
@@ -493,7 +507,8 @@ function renderMsg(m){
 }
 $("#replybar").onclick=()=>{replyTo=null;$("#replybar").style.display="none";};
 function renderMembers(list){
-  const l=list||[];
+  // 已吊销的身份一律不显示（后端在线接口已筛过 revoked=0，这里再兜底一道）。
+  const l=(list||[]).filter(x=>!x.revoked);
   $("#membercount").textContent=l.length?`（${l.length} 人）`:"";
   const mc2=$("#membercount2");if(mc2)mc2.textContent=l.length?`（${l.length} 人）`:"—";
   if(!l.length){$("#memberlist").innerHTML="—";return;}
@@ -513,6 +528,7 @@ function updateWhoami(){
   el.innerHTML=me?`当前身份：<b>${esc(me.name)}</b>（${TYPE_NAME[me.type]||me.type} · ${me.role==="owner"?"房主":me.role==="moderator"?"Moderator":"成员"}）<button id="switchid">切换身份</button>`:`当前身份：未加入 <button id="switchid">用 Token 加入</button>`;
   el.querySelector("#switchid").onclick=()=>{
     document.body.classList.add("panel-open");
+    document.body.classList.remove("panel-collapsed");updatePanelToggle();
     setTimeout(()=>$("#mytoken").focus(),300);
   };
 }
@@ -673,7 +689,7 @@ function autogrow(){const t=$("#input");t.style.height="auto";t.style.height=Mat
 $("#input").addEventListener("input",()=>{autogrow();if(ws&&ws.readyState===1)ws.send(JSON.stringify({type:"typing",typing:$("#input").value.length>0}));});
 async function loadAgents(){
   try{const r=await fetch(api+"/api/agents");const d=await r.json();
-    $("#agentlist").innerHTML=(d.agents||[]).length?d.agents.map(a=>{
+    $("#agentlist").innerHTML=(d.agents||[]).filter(a=>!a.revoked).length?(d.agents||[]).filter(a=>!a.revoked).map(a=>{
       const last=a.last_seen?new Date(a.last_seen).toLocaleString("zh-CN",{month:"2-digit",day:"2-digit",hour:"2-digit",minute:"2-digit"}):"从未发言";
       return `<div>${TYPE_EMOJI[a.type]||"🤖"} ${esc(a.name)} ${badge(a.type)}${platBadge(a.platform)} · 最后活跃 ${last}</div>`;
     }).join(""):"还没有 Agent 进房。";
@@ -1079,7 +1095,8 @@ async function loadAdmin(){
       loadAdmin();
     });
     const isOwner=me.role==="owner";
-    $("#adminmembers").innerHTML=(mem.identities||[]).filter(x=>x.id!==me.id).map(x=>{
+    // 已吊销的身份直接过滤、不渲染（「已吊销」徽章分支随之作废，已删）。
+    $("#adminmembers").innerHTML=(mem.identities||[]).filter(x=>x.id!==me.id&&!x.revoked).map(x=>{
       const muted=x.muted_until&&x.muted_until>Date.now();
       const acts=[];
       if(isOwner){
@@ -1091,7 +1108,7 @@ async function loadAdmin(){
         acts.push(`<button data-req="kick" data-tid="${esc(x.id)}" data-nm="${esc(x.name)}">申请踢出</button>`);
         acts.push(`<button data-req="revoke-key" data-tid="${esc(x.id)}" data-nm="${esc(x.name)}">申请吊销</button>`);
       }
-      return `<div class="rowline"><span>${TYPE_EMOJI[x.type]||"👤"} ${esc(x.name)} ${badge(x.type)}${platBadge(x.platform)} ${x.revoked?"<b style='color:#ff8a80'>已吊销</b>":muted?"<b style='color:#ffb74d'>禁言中</b>":""}</span><span>${acts.join(" ")}</span></div>`;
+      return `<div class="rowline"><span>${TYPE_EMOJI[x.type]||"👤"} ${esc(x.name)} ${badge(x.type)}${platBadge(x.platform)} ${muted?"<b style='color:#ffb74d'>禁言中</b>":""}</span><span>${acts.join(" ")}</span></div>`;
     }).join("")||"没有其他成员。";
     document.querySelectorAll("#adminmembers [data-mute]").forEach(b=>b.onclick=async()=>{
       if(!confirm(`禁言 ${b.dataset.nm} 10 分钟？`))return;
@@ -1117,13 +1134,13 @@ async function loadAdmin(){
     if(isOwner){
       $("#inboxwrap").style.display="block";
       const ib=await fetch(api+"/api/admin/key-inbox",{headers:authHeaders()}).then(r=>r.json());
-      $("#inboxlist").innerHTML=(ib.inbox||[]).length?ib.inbox.map(k=>`<div class="rowline"><span><code>${esc(k.token)}</code><br><span class="note">${esc(k.purpose||"")} · ${esc(k.created_by)} · ${new Date(k.created).toLocaleString("zh-CN")}</span></span><button data-dist="${esc(k.id)}">已分发</button></div>`).join(""):"私信箱是空的。";
+      $("#inboxlist").innerHTML=(ib.inbox||[]).filter(k=>!k.revoked).length?(ib.inbox||[]).filter(k=>!k.revoked).map(k=>`<div class="rowline"><span><code>${esc(k.token)}</code><br><span class="note">${esc(k.purpose||"")} · ${esc(k.created_by)} · ${new Date(k.created).toLocaleString("zh-CN")}</span></span><button data-dist="${esc(k.id)}">已分发</button></div>`).join(""):"私信箱是空的。";
       document.querySelectorAll("#inboxlist [data-dist]").forEach(b=>b.onclick=async()=>{
         await fetch(api+"/api/admin/distribute-key",{method:"POST",headers:authHeaders(),body:JSON.stringify({id:b.dataset.dist})});
         loadAdmin();
       });
       const wb=await fetch(api+"/api/bridge/wechat-bindings",{headers:authHeaders()}).then(r=>r.json());
-      $("#wechatbindlist").innerHTML=(wb.bindings||[]).length?wb.bindings.map(b=>`<div class="rowline"><span><b>${esc(b.identity_name||"?")}</b> ← 微信 <code>${esc((b.wechat_name||b.wechat_id||"").slice(0,24))}</code><br><span class="note">绑定于 ${new Date(b.bound_at).toLocaleString("zh-CN")}</span></span><span><button data-rebind="${esc(b.identity_id||"")}">重新生成绑定码</button> <button data-unbind="${esc(b.wechat_id||"")}">解绑</button></span></div>`).join(""):"还没有微信绑定。";
+      $("#wechatbindlist").innerHTML=(wb.bindings||[]).filter(b=>!b.revoked).length?(wb.bindings||[]).filter(b=>!b.revoked).map(b=>`<div class="rowline"><span><b>${esc(b.identity_name||"?")}</b> ← 微信 <code>${esc((b.wechat_name||b.wechat_id||"").slice(0,24))}</code><br><span class="note">绑定于 ${new Date(b.bound_at).toLocaleString("zh-CN")}</span></span><span><button data-rebind="${esc(b.identity_id||"")}">重新生成绑定码</button> <button data-unbind="${esc(b.wechat_id||"")}">解绑</button></span></div>`).join(""):"还没有微信绑定。";
       document.querySelectorAll("#wechatbindlist [data-unbind]").forEach(b=>b.onclick=async()=>{
         if(!confirm("解绑后该微信用户退回“微信访客”身份，key 本身不吊销。确定？"))return;
         await fetch(api+"/api/bridge/wechat-binding/"+encodeURIComponent(b.dataset.unbind),{method:"DELETE",headers:authHeaders()});
@@ -1264,7 +1281,7 @@ async function loadBridges(){
   const list=$("#bridgelist"); if(!list) return;
   const r=await fetch(api+"/api/admin/container-bridges",{headers:authHeaders()}).then(r=>r.json()).catch(()=>({error:"容器桥连不上"}));
   if(r.error){list.innerHTML=`<span class="note">微信桥管理不可用：${esc(r.error)}</span>`;$("#bridgecount").textContent="";return;}
-  const bs=r.bridges||[];
+  const bs=(r.bridges||[]).filter(b=>!b.revoked);
   $("#bridgecount").textContent=`${bs.length}/10`;
   list.innerHTML=bs.length?bs.map(b=>{
     const st=b.status||"", bs2=b.bind_status||"";
