@@ -407,9 +407,9 @@ function hashColor(id){
   let h=0;for(const c of (id||"x"))h=(h*31+c.charCodeAt(0))>>>0;
   return `hsl(${h%360} 45% 32%)`;
 }
-function esc(s){return String(s).replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;");}
+function esc(s){return String(s).replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;").replace(/"/g,"&quot;").replace(/'/g,"&#39;");}
 function badge(t){return t==="human"?'<span class="badge human">人类</span>':t==="agent"?'<span class="badge agent">Agent</span>':t==="bot"?'<span class="badge bot">Bot</span>':'<span class="badge sys">系统</span>';}
-function platBadge(p){return `<span class="badge plat">${{web:"网页",wechat:"微信",telegram:"Telegram",api:"API"}[p]||p||"网页"}</span>`;}
+function platBadge(p){return `<span class="badge plat">${{web:"网页",wechat:"微信",telegram:"Telegram",api:"API"}[p]||esc(p||"网页")}</span>`;}
 function avatarHtml(m){
   return `<div class="avatar" style="background:${hashColor(m.sender_id)}">${TYPE_EMOJI[m.sender_type]||"👤"}<span class="plat">${PLAT_EMOJI[m.platform||"web"]||"🌐"}</span></div>`;
 }
@@ -418,7 +418,7 @@ function authHeaders(){
 }
 async function loadRooms(){
   const r=await fetch(api+"/api/rooms");const d=await r.json();rooms=d.rooms||[];
-  $("#rooms").innerHTML=rooms.map(x=>`<button data-slug="${x.slug}" class="${x.slug===room?"active":""}"># ${x.name}<small>${x.topic||""}</small></button>`).join("");
+  $("#rooms").innerHTML=rooms.map(x=>`<button data-slug="${esc(x.slug)}" class="${x.slug===room?"active":""}"># ${esc(x.name)}<small>${esc(x.topic||"")}</small></button>`).join("");
   document.querySelectorAll("#rooms button").forEach(b=>b.onclick=()=>switchRoom(b.dataset.slug));
   document.querySelector("#rooms button.active")?.scrollIntoView({inline:"center",block:"nearest"});
   const cur=rooms.find(x=>x.slug===room);$("#topic").textContent=cur?("# "+cur.name+" — "+(cur.topic||"")):"";
@@ -720,7 +720,7 @@ function renderWorkbenchFloat(){
     if(!list.length)return `<div class="wb-group"><h4>${label}（0）</h4><div class="wb-empty">没有任务</div></div>`;
     return `<div class="wb-group"><h4>${label}（${list.length}）</h4>`+list.map(t=>{
       const src=wbSourceId(t.detail);
-      return `<div class="wb-task" data-station="${esc(t.station_id||"")}" data-task="${t.id}"><div>${esc(t.title||"")}</div><div class="wb-meta">${esc(wbStationName(t.station_id))}${src?` · 来源房消息 ${esc(src)}`:""} · 点我定位工位</div></div>`;
+      return `<div class="wb-task" data-station="${esc(t.station_id||"")}" data-task="${esc(String(t.id))}"><div>${esc(t.title||"")}</div><div class="wb-meta">${esc(wbStationName(t.station_id))}${src?` · 来源房消息 ${esc(src)}`:""} · 点我定位工位</div></div>`;
     }).join("")+`</div>`;
   }).join("");
   box.innerHTML=`
@@ -1055,7 +1055,7 @@ async function loadAdmin(){
       fetch(api+"/api/admin/identities",{headers:authHeaders()}).then(r=>r.json()),
     ]);
     const pend=(ap.approvals||[]).filter(a=>a.status==="pending");
-    $("#approvals").innerHTML=pend.length?pend.map(a=>`<div class="rowline"><span>${esc(a.requester_name)} 申请${{mute:"禁言",kick:"踢出",delete:"删消息","revoke-key":"吊销 key"}[a.action]||a.action} <b>${esc(a.target_name||"")}</b><br><span class="note">${esc(a.reason||"")}</span></span><span>${me.role==="owner"?`<button data-ap="${a.id}">批准</button> <button data-rj="${a.id}">驳回</button>`:"<span class='note'>等房主批准</span>"}</span></div>`).join(""):"没有待审批。";
+    $("#approvals").innerHTML=pend.length?pend.map(a=>`<div class="rowline"><span>${esc(a.requester_name)} 申请${{mute:"禁言",kick:"踢出",delete:"删消息","revoke-key":"吊销 key"}[a.action]||esc(a.action)} <b>${esc(a.target_name||"")}</b><br><span class="note">${esc(a.reason||"")}</span></span><span>${me.role==="owner"?`<button data-ap="${esc(a.id)}">批准</button> <button data-rj="${esc(a.id)}">驳回</button>`:"<span class='note'>等房主批准</span>"}</span></div>`).join(""):"没有待审批。";
     document.querySelectorAll("#approvals [data-ap]").forEach(b=>b.onclick=async()=>{
       const r=await fetch(api+"/api/admin/approve",{method:"POST",headers:authHeaders(),body:JSON.stringify({approval_id:b.dataset.ap})});
       const d=await r.json();if(d.error)alert(d.error);loadAdmin();
@@ -1069,13 +1069,13 @@ async function loadAdmin(){
       const muted=x.muted_until&&x.muted_until>Date.now();
       const acts=[];
       if(isOwner){
-        acts.push(`<button data-mute="${x.id}" data-nm="${esc(x.name)}">禁言10分钟</button>`);
-        acts.push(`<button data-kick="${x.id}" data-nm="${esc(x.name)}">踢出</button>`);
-        acts.push(`<button data-rev="${x.id}" data-nm="${esc(x.name)}">吊销 key</button>`);
+        acts.push(`<button data-mute="${esc(x.id)}" data-nm="${esc(x.name)}">禁言10分钟</button>`);
+        acts.push(`<button data-kick="${esc(x.id)}" data-nm="${esc(x.name)}">踢出</button>`);
+        acts.push(`<button data-rev="${esc(x.id)}" data-nm="${esc(x.name)}">吊销 key</button>`);
       }else{
-        acts.push(`<button data-req="mute" data-tid="${x.id}" data-nm="${esc(x.name)}">申请禁言</button>`);
-        acts.push(`<button data-req="kick" data-tid="${x.id}" data-nm="${esc(x.name)}">申请踢出</button>`);
-        acts.push(`<button data-req="revoke-key" data-tid="${x.id}" data-nm="${esc(x.name)}">申请吊销</button>`);
+        acts.push(`<button data-req="mute" data-tid="${esc(x.id)}" data-nm="${esc(x.name)}">申请禁言</button>`);
+        acts.push(`<button data-req="kick" data-tid="${esc(x.id)}" data-nm="${esc(x.name)}">申请踢出</button>`);
+        acts.push(`<button data-req="revoke-key" data-tid="${esc(x.id)}" data-nm="${esc(x.name)}">申请吊销</button>`);
       }
       return `<div class="rowline"><span>${TYPE_EMOJI[x.type]||"👤"} ${esc(x.name)} ${badge(x.type)}${platBadge(x.platform)} ${x.revoked?"<b style='color:#ff8a80'>已吊销</b>":muted?"<b style='color:#ffb74d'>禁言中</b>":""}</span><span>${acts.join(" ")}</span></div>`;
     }).join("")||"没有其他成员。";
@@ -1103,7 +1103,7 @@ async function loadAdmin(){
     if(isOwner){
       $("#inboxwrap").style.display="block";
       const ib=await fetch(api+"/api/admin/key-inbox",{headers:authHeaders()}).then(r=>r.json());
-      $("#inboxlist").innerHTML=(ib.inbox||[]).length?ib.inbox.map(k=>`<div class="rowline"><span><code>${esc(k.token)}</code><br><span class="note">${esc(k.purpose||"")} · ${esc(k.created_by)} · ${new Date(k.created).toLocaleString("zh-CN")}</span></span><button data-dist="${k.id}">已分发</button></div>`).join(""):"私信箱是空的。";
+      $("#inboxlist").innerHTML=(ib.inbox||[]).length?ib.inbox.map(k=>`<div class="rowline"><span><code>${esc(k.token)}</code><br><span class="note">${esc(k.purpose||"")} · ${esc(k.created_by)} · ${new Date(k.created).toLocaleString("zh-CN")}</span></span><button data-dist="${esc(k.id)}">已分发</button></div>`).join(""):"私信箱是空的。";
       document.querySelectorAll("#inboxlist [data-dist]").forEach(b=>b.onclick=async()=>{
         await fetch(api+"/api/admin/distribute-key",{method:"POST",headers:authHeaders(),body:JSON.stringify({id:b.dataset.dist})});
         loadAdmin();
