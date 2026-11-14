@@ -254,7 +254,7 @@ pre{background:#10131a;border:1px solid var(--line);border-radius:8px;padding:10
     <div id="composer">
       <button id="attachbtn" title="先用 Token 加入" disabled style="flex:none">📎</button>
       <input type="file" id="filepick" multiple style="display:none">
-      <textarea id="input" rows="1" placeholder="输入消息，Alt/⌘+回车发送，@名字 可以提及某人，@Moderator 问小管家…" autocomplete="off"></textarea>
+      <textarea id="input" rows="1" placeholder="输入消息，Alt/⌘+回车发送，@名字 可以提及某人，@Moderator 问小管家…，可直接粘贴图片发送" autocomplete="off"></textarea>
       <button class="primary" id="send">发送</button>
     </div>
   </section>
@@ -686,6 +686,26 @@ $("#filepick").addEventListener("change",()=>{
   files.slice(0,left).forEach(f=>uploadOne(f));
 });
 $("#input").addEventListener("keydown",e=>{if(e.key==="Enter"&&(e.altKey||e.metaKey)){e.preventDefault();sendMessage();}});
+// ---- 粘贴图片（t_28f204c9）：剪贴板里的图片走同一条上传链路 ----
+// 只有剪贴板含图片时才接管；纯文字粘贴走默认行为，不影响正常输入。
+// 上传、5 个附件上限、10MB 单文件上限、发送时带附件、图片内联显示，
+// 全部复用已有的 uploadOne / pendingAtts / sendMessage，不另起链路。
+$("#input").addEventListener("paste",e=>{
+  const items=[...(e.clipboardData?.items||[])].filter(it=>it.type&&it.type.startsWith("image/"));
+  if(!items.length)return;
+  if(!me){alert("先用 Token 进入聊天室");return;}
+  if(!fileEnabled){alert("管理员还没配置存储，上传不可用。");return;}
+  e.preventDefault();
+  const left=5-pendingAtts.length;
+  if(left<=0){alert("一次最多 5 个附件，先发掉或移除一些再传。");return;}
+  if(items.length>left)alert(`一次最多 5 个附件，只传前 ${left} 个。`);
+  items.slice(0,left).forEach((it,i)=>{
+    const f=it.getAsFile();if(!f)return;
+    // 剪贴板图片常无可用文件名（Chrome 默认 image.png），给一个带时间的默认名
+    const named=(f.name&&f.name!=="image.png")?f:new File([f],`粘贴的图片-${Date.now()}-${i+1}.png`,{type:f.type});
+    uploadOne(named);
+  });
+});
 function autogrow(){const t=$("#input");t.style.height="auto";t.style.height=Math.min(t.scrollHeight,120)+"px";}
 $("#input").addEventListener("input",()=>{autogrow();if(ws&&ws.readyState===1)ws.send(JSON.stringify({type:"typing",typing:$("#input").value.length>0}));});
 async function loadAgents(){
