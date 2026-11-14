@@ -538,8 +538,9 @@ function updateWhoami(){
 let wsRetryTimer=null,wsRetryDelay=3000;
 let hbTimer=null,lastPong=0;
 function stopHeartbeat(){clearInterval(hbTimer);hbTimer=null;}
-// 心跳：服务端支持 ping→pong。手机网络下 WS 会半死（不断不断开、
-// 也不回消息），20 秒 ping 一次、35 秒无 pong 就强制重连，
+// 心跳：服务端支持 ping→pong（边缘自动回，不进 DO，节流 DO 免费额度）。
+// 手机网络下 WS 会半死（不断不断开、也不回消息），
+// 60 秒 ping 一次、120 秒无 pong 就强制重连，
 // 避免页面显示“已连接”却收不到消息。卡在 CLOSING（readyState 2）
 // 迟迟不触发 onclose 的情况也一样处理——实测 close() 后 10 秒以上
 // 仍停在 CLOSING、onclose 不触发。
@@ -552,12 +553,12 @@ function startHeartbeat(){
   hbTimer=setInterval(()=>{
     if(!ws)return;
     if(ws.readyState===1){
-      if(Date.now()-lastPong>35000){forceReconnect();return;}
+      if(Date.now()-lastPong>120000){forceReconnect();return;}
       try{ws.send(JSON.stringify({type:"ping"}));}catch{}
-    }else if(Date.now()-lastPong>35000){
+    }else if(Date.now()-lastPong>120000){
       forceReconnect();
     }
-  },20000);
+  },60000);
 }
 function scheduleWsRetry(){
   if(!me||wsRetryTimer)return;
@@ -589,7 +590,7 @@ document.addEventListener("visibilitychange",()=>{
 });
 function startPoll(){if(pollTimer||!me)return;pollTimer=setInterval(async()=>{
   try{const r=await fetch(`${api}/api/rooms/${room}/messages?limit=50`,{headers:authHeaders()});const d=await r.json();
-    (d.messages||[]).forEach(addMsg);if(d.members)renderMembers(d.members);}catch{}},2000);}
+    (d.messages||[]).forEach(addMsg);if(d.members)renderMembers(d.members);}catch{}},10000);}
 function stopPoll(){clearInterval(pollTimer);pollTimer=null;}
 // ---- 文件上传（图片/文档/视频等，见 /api/files/*）----
 // 待发送附件：上传成功后才进 pendingAtts（done=true），发送时只带 done 的；
@@ -1467,7 +1468,7 @@ curl -X POST ${api}/api/evaluate \\
   initWorkbenchFloatDrag();
   if(isMobile()){setMobileTab("chat");}else{openWorkbenchFloat();}
   document.addEventListener("keydown",e=>{if(e.key==="Escape"){if(isMobile()&&mobileTab==="workbench"){setMobileTab("chat");}else{closeWorkbenchFloat();}}});
-  setInterval(()=>{loadWorkbenchBoard();},60000);
+  setInterval(()=>{loadWorkbenchBoard();},300000);
 })();
 // 手机：抽屉与成员开关
 $("#menubtn").onclick=()=>document.body.classList.add("panel-open");

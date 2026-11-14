@@ -150,6 +150,11 @@ export class ChatRoom {
     this.ctx = ctx;
     this.env = env;
     this.rate = new Map();
+    // 节流：心跳 ping 由边缘自动回 pong，不唤醒 DO（DO Requests 免费额度 100k/天）。
+    // 客户端发的是 JSON.stringify({type:"ping"})，即精确字符串 '{"type":"ping"}'；
+    // 回复须与服务端原先回的 JSON.stringify({type:"pong"}) 逐字节一致。
+    // 旧环境不支持时静默回落到 webSocketMessage 里的手动 ping→pong。
+    try { this.ctx.setWebSocketAutoResponse(new WebSocketRequestResponsePair('{"type":"ping"}', '{"type":"pong"}')); } catch {}
     this.ctx.blockConcurrencyWhile(async () => {
       const sql = this.ctx.storage.sql;
       sql.exec(`CREATE TABLE IF NOT EXISTS identities(
