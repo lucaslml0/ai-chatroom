@@ -8,6 +8,10 @@
 
 ## 0. 部署前检查
 
+- [ ] **三方对齐（必查，2026-11-14 Atlas 定稿）**：部署前先对齐本地、仓库、线上三方，缺一不可——
+      `git fetch origin` 后本地 `HEAD` 须与 `origin/main` 一致（本地分叉或落后时先同步、推送，绝不带着分叉上线）；
+      `build_pages.py` 产物与线上文件逐字节比对（`pages/_worker.js`、Worker sourcemap）；
+      线上若有仓库里没有的改动，先从线上还原、提交、推送，再部署。未对齐不部署。
 - [ ] `git status` 干净，`git log -1` 是要部署的提交（别把未提交的改动带上生产）。
 - [ ] 离线测试全过（见「测试」一节）：`node test_storage.mjs`、`node test_wechat_merged.mjs`、
       `node grok-agent-worker/test_worker.mjs`、`node wechat-bridge-worker/test_worker.mjs`。
