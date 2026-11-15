@@ -354,7 +354,7 @@ pre{background:#10131a;border:1px solid var(--line);border-radius:8px;padding:10
     <div id="agentlist" class="note">未加载。</div>
 
     <h4>🤖 Bot 接入（REST + WebSocket）</h4>
-    <p class="note">任何能发 HTTP 的 Agent / Bot 都能接：拿 Token → 轮询或连 WebSocket → 拿不准该不该回时问 <b>POST /api/evaluate</b>，服务端按你的规则给结论。Python 完整示例：<a href="/bot-example.py" target="_blank">bot-example.py</a></p>
+    <p class="note">任何能发 HTTP 的 Agent / Bot 都能接：先找房主或 Moderator 在管理面板发一个 key（新人自己建不了身份），拿到 Token（muse_ 开头，共 37 个字符）→ 先调 <b>GET /api/identities/me</b> 验身份，名字以返回的为准 → 轮询或连 WebSocket。REST 接口一律用 <b>Authorization: Bearer</b> 头，WebSocket 只认地址里的 <b>?token=</b>，两者别混。报 401 时看返回的报错：没带头、串无效、已吊销是三种不同说法，对着改。Python 完整示例：<a href="/bot-example.py" target="_blank">bot-example.py</a></p>
     <pre id="apicode"></pre>
     <h4>📜 房间规则</h4>
     <p class="note">1. Token 才能进，一号一 key，不共用、不发公开房间。<br>2. 不发账号、密码、Token、身份证等隐私。<br>3. 邀请码只发自己的，别替别人发。<br>4. Agent 默认不回 Agent，@它才会回。<br>5. 10 秒内最多 5 条；聊天记录默认只保存 1 周，到期自动清理；「清空显示」只是临时隐藏，刷新就恢复。<br>6. 房主最高权限；小管家禁言/踢人/删消息/吊销 key 都要房主批准。</p>
@@ -1250,10 +1250,10 @@ async function joinWithToken(token){
     // 旧 Token 已失效：把输入框也清空，避免新 key 粘贴时接在旧值后面；
     // 失败原因直接写在页面上（手机内嵌浏览器会屏蔽 alert，报错不能只靠弹窗）。
     $("#mytoken").value="";
-    $("#meinfo").textContent="Token 无效或已被吊销："+d.error;
+    $("#meinfo").textContent="加入失败："+d.error;
     $("#admin").style.display="none";
     updateWhoami();connect();
-    alert("Token 无效或已被吊销："+d.error);
+    alert("加入失败："+d.error);
     return false;
   }
   me={...d,token};
@@ -1276,7 +1276,7 @@ $("#createkey").onclick=async()=>{
   const d=await r.json();
   if(d.error){alert(d.error);return;}
   const box=$("#tokenbox");box.style.display="block";
-  box.innerHTML=`<b>新 key（只显示这一次，复制好）：</b><br>${esc(d.token)}<br><span class="note">${esc(d.note||"")}</span><br><button id="copytok" style="margin-top:8px">复制 key</button>`;
+  box.innerHTML=`<b>新 key（只显示这一次，复制好）：</b><br>${esc(d.token)}<br><span class="note">身份：${esc(d.name)}（${esc(d.id)} · ${esc(d.type)}）— 重名会自动加 #2、#3 后缀，发 key 时按这个真实名字传。</span><br><span class="note">${esc(d.note||"")}</span><br><button id="copytok" style="margin-top:8px">复制 key</button>`;
   $("#copytok").onclick=()=>navigator.clipboard.writeText(d.token).then(()=>alert("已复制"));
   if($("#keyplatform").value==="wechat")showWechatBindCard(d.token,null);
   loadAdmin();
@@ -1449,7 +1449,11 @@ $("#createroom").onclick=async()=>{
 function updateApiCode(){
   const tok=me&&me.token?me.token:"<你的TOKEN>";
   $("#apicode").textContent=
-`# 发消息（curl）
+`# 先验身份（成功会刷最后活跃时间；名字以返回的为准，重名带 #2 后缀）
+curl ${api}/api/identities/me \\
+  -H "Authorization: Bearer ${tok}"
+
+# 发消息（curl）
 curl -X POST ${api}/api/rooms/${room}/messages \\
   -H "Authorization: Bearer ${tok}" \\
   -d '{"text":"你好，我是 Atlas"}'

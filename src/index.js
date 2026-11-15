@@ -915,6 +915,32 @@ async function authQueryToken(env, url) {
   if (ident.revoked) return null;
   return { ...ident, token };
 }
+// 401 报错要分得清原因（t_6b8a8f76：新 agent 按主页加入报 401 时，统一的
+// “需要 Bearer token”让人分不清是没带头、串错了还是被吊销）。只在鉴权已经
+// 失败的分支里多查一次注册表，成功路径不增加调用。
+async function classifyToken(env, token) {
+  if (!token) return "missing";
+  const r = await registryStub(env).fetch("https://do/registry/identity?token=" + encodeURIComponent(token));
+  if (!r.ok) return "invalid";
+  const ident = await r.json();
+  return ident.revoked ? "revoked" : "ok";
+}
+function bearerTokenOf(request) {
+  const h = request.headers.get("Authorization") || "";
+  return h.startsWith("Bearer ") ? h.slice(7) : "";
+}
+async function authFailErr(env, request) {
+  const reason = await classifyToken(env, bearerTokenOf(request));
+  if (reason === "missing") return err("没带 Authorization: Bearer 头，REST 接口只认请求头里的 Token", 401);
+  if (reason === "revoked") return err("这个 Token 已被吊销，找房主重新要一个", 401);
+  return err("Token 无效：串不对或不存在，检查是不是抄错、截断，或 key 还没建", 401);
+}
+async function wsFailErr(env, url) {
+  const reason = await classifyToken(env, url.searchParams.get("token") || "");
+  if (reason === "missing") return err("需要 Token 才能加入（?token=…），WebSocket 只认地址里的 Token", 401);
+  if (reason === "revoked") return err("这个 Token 已被吊销，找房主重新要一个", 401);
+  return err("Token 无效：?token= 里的串不对或不存在，检查是不是抄错、截断，或 key 还没建", 401);
+}
 function needRole(ident, roles) {
   if (!ident) return err("需要 Bearer token", 401);
   if (!roles.includes(ident.role)) return err("权限不足，需要 " + roles.join("/"), 403);
@@ -2011,7 +2037,7 @@ export default {
       }
       if (url.pathname === "/api/bridge/wechat-bindings" && request.method === "GET") {
         const me = await authIdentity(env, request);
-        if (!me) return err("需要 Bearer token", 401);
+        if (!me) return authFailErr(env, request);
         // 房主看管理面板；微信桥看列表做回推路由（列表里没有密钥，只有名字与微信 id）。
         if (me.role !== "owner" && me.bridge !== "wechat") return err("只有房主或微信桥能看绑定列表", 403);
         const { data } = await regCall(env, "/registry/wechat-bindings");
@@ -2158,21 +2184,22 @@ export default {
         return json(data, status);
       }
       // ---- 我的身份 ----
+      // 成功调 me 也算用过一次：刷 last_seen，私信箱里这条 key 随之删除（t_6b8a8f76）。
       if (url.pathname === "/api/identities/me" && request.method === "GET") {
-        const ident = await authIdentity(env, request);
-        if (!ident) return err("需要 Bearer token", 401);
+        const ident = await authIdentity(env, request, true);
+        if (!ident) return authFailErr(env, request);
         return json({ id: ident.id, name: ident.name, type: ident.type, platform: ident.platform, role: ident.role, rules: ident.rules });
       }
       if (url.pathname === "/api/identities/me/rules" && request.method === "PUT") {
         const ident = await authIdentity(env, request);
-        if (!ident) return err("需要 Bearer token", 401);
+        if (!ident) return authFailErr(env, request);
         const body = await bodyJson();
         const { status, data } = await regCall(env, "/registry/set-rules", { token: ident.token, rules: body });
         return json(data, status);
       }
       if (url.pathname === "/api/evaluate" && request.method === "POST") {
         const ident = await authIdentity(env, request);
-        if (!ident) return err("需要 Bearer token", 401);
+        if (!ident) return authFailErr(env, request);
         const body = await bodyJson();
         const msg = {
           sender_id: String(body.sender_id || ""), sender_name: String(body.sender_name || ""),
@@ -2186,7 +2213,7 @@ export default {
       // 任务存在注册表 DO meta（key=tasks）。只能操作自己的任务，房主除外。
       if (url.pathname === "/api/tasks" && request.method === "GET") {
         const me = await authIdentity(env, request);
-        if (!me) return err("需要 Bearer token", 401);
+        if (!me) return authFailErr(env, request);
         const tasks = await loadTasks(env);
         const status = url.searchParams.get("status") || "";
         const list = status ? tasks.filter((t) => t.status === status) : tasks;
@@ -2194,7 +2221,7 @@ export default {
       }
       if (url.pathname === "/api/tasks/register" && request.method === "POST") {
         const me = await authIdentity(env, request);
-        if (!me) return err("需要 Bearer token", 401);
+        if (!me) return authFailErr(env, request);
         const body = await bodyJson();
         const title = String(body.title || "").trim().slice(0, 120);
         const detail = String(body.detail || "").trim().slice(0, 500);
@@ -2208,7 +2235,7 @@ export default {
       const taskProgressMatch = url.pathname.match(/^\/api\/tasks\/([A-Za-z0-9_-]+)\/progress$/);
       if (taskProgressMatch && request.method === "POST") {
         const me = await authIdentity(env, request);
-        if (!me) return err("需要 Bearer token", 401);
+        if (!me) return authFailErr(env, request);
         const body = await bodyJson();
         const note = String(body.note || "").trim().slice(0, 500);
         if (!note) return err("note 不能为空", 400);
@@ -2225,7 +2252,7 @@ export default {
       const taskDoneMatch = url.pathname.match(/^\/api\/tasks\/([A-Za-z0-9_-]+)\/done$/);
       if (taskDoneMatch && request.method === "POST") {
         const me = await authIdentity(env, request);
-        if (!me) return err("需要 Bearer token", 401);
+        if (!me) return authFailErr(env, request);
         const tasks = await loadTasks(env);
         const task = tasks.find((t) => t.id === taskDoneMatch[1]);
         if (!task) return err("任务不存在", 404);
@@ -2238,7 +2265,7 @@ export default {
       const taskDeleteMatch = url.pathname.match(/^\/api\/tasks\/([A-Za-z0-9_-]+)$/);
       if (taskDeleteMatch && request.method === "DELETE") {
         const me = await authIdentity(env, request);
-        if (!me) return err("需要 Bearer token", 401);
+        if (!me) return authFailErr(env, request);
         const tasks = await loadTasks(env);
         const idx = tasks.findIndex((t) => t.id === taskDeleteMatch[1]);
         if (idx < 0) return err("任务不存在", 404);
@@ -2257,13 +2284,13 @@ export default {
           // v2.6：读历史也刷 last_seen——REST 轮询的 Agent/Bot 与桥接
           // 靠这一刷出现在在线名单里（5 分钟窗口）。
           const me = await authIdentity(env, request, true);
-          if (!me) return err("需要 Bearer token", 401);
+          if (!me) return authFailErr(env, request);
           const r = await stub.fetch("https://do/room/history?limit=" + encodeURIComponent(url.searchParams.get("limit") || "20"));
           return json(await r.json(), r.status);
         }
         if (m[2] === "messages" && request.method === "POST") {
           const me = await authIdentity(env, request, true);
-          if (!me) return err("需要 Bearer token", 401);
+          if (!me) return authFailErr(env, request);
           const bodyText = await request.text();
           const r = await stub.fetch("https://do/room/send", {
             method: "POST",
@@ -2274,7 +2301,7 @@ export default {
         }
         if (m[2] === "delete" && request.method === "POST") {
           const me = await authIdentity(env, request);
-          if (!me) return err("需要 Bearer token", 401);
+          if (!me) return authFailErr(env, request);
           const bodyText = await request.text();
           const r = await stub.fetch("https://do/room/delete", {
             method: "POST",
@@ -2313,7 +2340,7 @@ export default {
         }
         if (m[2] === "ws") {
           const me = await authQueryToken(env, url);
-          if (!me) return err("需要 Token 才能加入（?token=…）", 401);
+          if (!me) return wsFailErr(env, url);
           regCall(env, "/registry/touch", { token: me.token }).catch(() => {});
           const r = await stub.fetch("https://do/room/ws", {
             headers: {
@@ -2328,7 +2355,7 @@ export default {
       // 上传：multipart/form-data，字段 file + room。返回 {id,name,mime,size,url}。
       if (url.pathname === "/api/files/upload" && request.method === "POST") {
         const me = await authIdentity(env, request);
-        if (!me) return err("需要 Bearer token", 401);
+        if (!me) return authFailErr(env, request);
         const cfg = await getStorageConfig(env);
         if (cfg.provider === "none") return err("管理员还没配置文件存储", 503);
         let form;
@@ -2362,7 +2389,7 @@ export default {
       // 存储状态（任意成员）：只告诉有没有配、哪家、上限，不含密钥。
       if (url.pathname === "/api/files/status" && request.method === "GET") {
         const me = await authIdentity(env, request);
-        if (!me) return err("需要 Bearer token", 401);
+        if (!me) return authFailErr(env, request);
         const cfg = await getStorageConfig(env);
         return json({ enabled: cfg.provider !== "none", provider: cfg.provider, max_file_mb: cfg.max_file_mb });
       }
@@ -2393,7 +2420,7 @@ export default {
       }
       if (fileMatch && fileMatch[1] !== "upload" && fileMatch[1] !== "status" && request.method === "DELETE") {
         const me = await authIdentity(env, request);
-        if (!me) return err("需要 Bearer token", 401);
+        if (!me) return authFailErr(env, request);
         const { status, data } = await regCall(env, "/registry/files/get?id=" + encodeURIComponent(fileMatch[1]));
         if (status !== 200) return err(data.error || "文件不存在", 404);
         const { status: ds, data: dd } = await regCall(env, "/registry/files/delete", { id: fileMatch[1], requester_id: me.id, is_admin: me.role === "owner" });
@@ -2533,7 +2560,7 @@ export default {
       // ---- 3D 工作台快照（任务板入口用；快照由同步任务每 5 分钟推送）----
       if (url.pathname === "/api/workbench/board" && request.method === "POST") {
         const me = await authIdentity(env, request);
-        if (!me) return err("需要 Bearer token", 401);
+        if (!me) return authFailErr(env, request);
         const body = await bodyJson();
         if (!body || typeof body !== "object" || !Array.isArray(body.tasks)) return err("快照里要有 tasks 数组", 400);
         const snapshot = { ...body, updated_at: body.updated_at || new Date().toISOString() };
@@ -2542,7 +2569,7 @@ export default {
       }
       if (url.pathname === "/api/workbench/board" && request.method === "GET") {
         const me = await authIdentity(env, request);
-        if (!me) return err("需要 Bearer token", 401);
+        if (!me) return authFailErr(env, request);
         const { data } = await regCall(env, "/registry/meta?key=workbench_board");
         if (!data || !data.value) return json({ board: null, updated_at: null });
         let board = null;

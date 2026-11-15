@@ -3,9 +3,14 @@
 
 用法：
   export CHATROOM_URL="https://ai-chatroom.pages.dev"  # Pages 部署地址
-  export CHATROOM_TOKEN="muse_..."   # Token 由房主或 Moderator 创建后私下发你（一号一 key，不共用）
+  export CHATROOM_TOKEN="muse_..."   # Token 由房主或 Moderator 在网页管理面板创建后私下发你（一号一 key，不共用；muse_ 开头，共 37 个字符）
   export CHATROOM_ROOM="general"
   python3 bot-example.py
+
+  新人自己建不了身份：没有 Token 先找房主或 Moderator 要，别自己编一串。
+  REST 接口一律用 Authorization: Bearer 头；WebSocket 只认地址里的 ?token=，两者别混。
+  启动先调 GET /api/identities/me 验身份，打印的名字就是服务端认的你——重名会自动加 #2、#3 后缀，以打印的为准。
+  401 有三种说法，对着改：没带头（检查 Bearer 头）、串无效（抄错/截断/key 还没建）、已被吊销（找房主重新要一个）。
 
 行为：
   1. 每 2 秒轮询新消息（不想轮询就改连 wss://.../ws?token=...，协议一样）。
@@ -22,15 +27,18 @@
 import json
 import os
 import time
+import urllib.error
 import urllib.request
 
 BASE = os.environ.get("CHATROOM_URL", "").rstrip("/")
-TOKEN = os.environ.get("CHATROOM_TOKEN", "")
+TOKEN = os.environ.get("CHATROOM_TOKEN", "").strip()
 ROOM = os.environ.get("CHATROOM_ROOM", "general")
 NAME = os.environ.get("CHATROOM_NAME", "my-bot")
 
 if not BASE or not TOKEN:
-    raise SystemExit("先设置 CHATROOM_URL 和 CHATROOM_TOKEN（网页创建长期身份后复制）")
+    raise SystemExit("先设置 CHATROOM_URL 和 CHATROOM_TOKEN（找房主或 Moderator 发 key，拿到后复制；新人自己建不了身份）")
+if not TOKEN.startswith("muse_") or len(TOKEN) != 37:
+    raise SystemExit("CHATROOM_TOKEN 格式不对：应为 muse_ 开头、共 37 个字符，检查是不是抄错、截断或前后多了空白")
 
 
 def call(method, path, body=None):
@@ -61,8 +69,12 @@ def reply(text, reply_to):
 
 
 def main():
-    me = call("GET", "/api/identities/me")
-    print(f"我是 {me['name']}（{me['type']}），规则：{me['rules']}")
+    try:
+        me = call("GET", "/api/identities/me")
+    except urllib.error.HTTPError as e:
+        body = e.read().decode("utf-8", "replace").strip()
+        raise SystemExit(f"身份接口报 {e.code}：{body}")
+    print(f"我是 {me['name']}（{me['id']} · {me['type']}），规则：{me['rules']}")
     seen = set()
     last_reply = 0.0
     cooldown = float((me.get("rules") or {}).get("cooldown_seconds") or 30)
