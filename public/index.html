@@ -113,6 +113,7 @@ pre{background:#10131a;border:1px solid var(--line);border-radius:8px;padding:10
 .wb-float-btns{display:flex;gap:6px}
 .wb-float-btns button{padding:2px 10px;font-size:14px;line-height:1.4}
 #wb3d{position:relative;height:300px;background:#0b0e13}
+#wbfloat.scene-collapsed #wb3d{display:none}
 #wb3d canvas{display:block;width:100%;height:100%}
 #wb3dfallback{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;color:var(--dim);font-size:13px;padding:16px;text-align:center}
 .wb3d-hint{position:absolute;top:10px;left:10px;z-index:2;background:rgba(16,19,26,.75);color:var(--dim);font-size:12px;padding:4px 10px;border-radius:16px;pointer-events:none;white-space:nowrap}
@@ -133,6 +134,8 @@ pre{background:#10131a;border:1px solid var(--line);border-radius:8px;padding:10
 .wb-group h4{margin:0 0 6px;font-size:14px}
 .wb-task{border:1px solid var(--line);border-radius:8px;padding:8px 10px;margin-bottom:6px;background:var(--panel);font-size:14px}
 .wb-task .wb-meta{font-size:12px;color:var(--dim);margin-top:2px}
+.wb-progress{font-size:13px;line-height:1.5;margin-top:6px;overflow-wrap:anywhere;word-break:break-word;white-space:pre-wrap}
+.wb-progress .wb-prog-time{font-size:12px;color:var(--dim);margin-top:2px}
 .wb-empty{color:var(--dim);font-size:13px;padding:4px 0}
 .wb-stations{display:flex;gap:6px;flex-wrap:wrap;margin-top:6px}
 .wb-station{font-size:12px;border:1px solid var(--line);border-radius:20px;padding:2px 10px}
@@ -187,6 +190,7 @@ pre{background:#10131a;border:1px solid var(--line);border-radius:8px;padding:10
   body[data-mobiletab="workbench"] main>aside,body[data-mobiletab="workbench"] section#chat{display:none}
   body[data-mobiletab="workbench"] #wbfloat{display:flex;flex-direction:column;position:fixed;left:0;right:0;top:var(--mtop,96px);bottom:0;width:auto;max-width:none;border:none;border-radius:0;box-shadow:none;z-index:45}
   body[data-mobiletab="workbench"] .wb-float-head{flex:none;cursor:default}
+  body[data-mobiletab="workbench"] .wb-float-btns button{padding:8px 12px;min-height:44px}
   body[data-mobiletab="workbench"] #wbfloatbody{flex:1;min-height:0;overflow-y:auto}
   body[data-mobiletab="workbench"] #wb3d{height:38vh}
   body[data-mobiletab="workbench"] #wbmin{display:none}
@@ -364,7 +368,7 @@ pre{background:#10131a;border:1px solid var(--line);border-radius:8px;padding:10
 <div id="wbfloat" aria-hidden="true">
   <div class="wb-float-head" id="wbfloathead">
     <h3>🧑‍💼 3D 工作台</h3>
-    <span class="wb-float-btns"><button id="wbreset" title="复位视角">↺ 视角</button><button id="wbmin" title="最小化">−</button><button id="wbclose" title="关闭">✕</button></span>
+    <span class="wb-float-btns"><button id="wbscenetoggle" title="收起/展开 3D 场景">收起 3D</button><button id="wbreset" title="复位视角">↺ 视角</button><button id="wbmin" title="最小化">−</button><button id="wbclose" title="关闭">✕</button></span>
   </div>
   <div id="wbfloatbody">
     <div id="wb3d"><div class="wb3d-hint">拖拽旋转 · 双指缩放 · 点工位查看</div><div class="wb3d-zoom"><button id="wbzoomin" title="放大">＋</button><button id="wbzoomout" title="缩小">－</button></div></div>
@@ -717,10 +721,24 @@ async function loadAgents(){
   }catch{$("#agentlist").textContent="加载失败。";}
 }
 // ---- 3D 工作台入口（小动态图 + 点开放大看任务板）----
-// 快照由同步任务每 5 分钟推到 /api/workbench/board；这里只读不写。
-// 任务 detail 可能含订阅链接等敏感内容，弹窗只显示标题、工位名、来源房消息 id，不显示 detail 全文。
+// 任务直接读 /api/tasks（实时数据，只读不写）；任务接口不可用时才回落到 /api/workbench/board 快照（快照自 2026-11-14 起无人推送，已过期）。
+// 任务 detail 可能含订阅链接等敏感内容，弹窗只显示标题、工位名、来源房消息 id 和最新进度备注，不显示 detail 全文。
 const STATION_NAMES={"UNIT-01":"Atlas（总控）","UNIT-02":"Marley","UNIT-03":"WorkBuddy 国内版","UNIT-04":"WorkBuddy 网页端","UNIT-05":"Gemini","UNIT-06":"Ren","UNIT-07":"Moderator（小管家）","UNIT-08":"Hark"};
 const STATION_IDS=["UNIT-01","UNIT-02","UNIT-03","UNIT-04","UNIT-05","UNIT-06","UNIT-07","UNIT-08"];
+// 任务接口的 agent_id → 站内工位（与房间规则 v4 的工位表一致）
+const WB_AGENT_STATIONS={"u_74012299":"UNIT-02","u_3f2395f0":"UNIT-06"};
+function wbStationForTask(t){
+  if(t.agent_id&&WB_AGENT_STATIONS[t.agent_id])return WB_AGENT_STATIONS[t.agent_id];
+  const name=String(t.agent||"");
+  if(name){for(const id of STATION_IDS){if(STATION_NAMES[id]&&STATION_NAMES[id].includes(name))return id;}}
+  return null;
+}
+function wbBoardFromTasks(list){
+  const tasks=(list||[]).map(t=>({id:t.id,title:t.title,status:t.status,station_id:wbStationForTask(t),detail:t.detail||"",progress:Array.isArray(t.progress)?t.progress:[]}));
+  const c={waiting:0,in_progress:0,done:0};
+  tasks.forEach(t=>{if(c[t.status]!=null)c[t.status]++;});
+  return{tasks,stats:c};
+}
 let wbBoard=null,wbUpdatedAt=null;
 function wbStationName(id){return STATION_NAMES[id]||(id||"未分配");}
 function wbSourceId(detail){
@@ -747,7 +765,7 @@ function renderWorkbenchEntry(){
   if(!wbBoard){
     w.textContent="—";p.textContent="—";d.textContent="—";
     dots.innerHTML=STATION_IDS.map(id=>`<span class="wb-dot unassigned" title="${esc(wbStationName(id))}"></span>`).join("");
-    up.textContent="暂无任务快照，稍后再看";
+    up.textContent="暂无任务数据，稍后再看";
     return;
   }
   const c=wbCounts(wbBoard),busy=wbBusySet(wbBoard);
@@ -760,7 +778,7 @@ const STATION_POS={"UNIT-01":[-5.1,1.5],"UNIT-02":[-1.7,1.5],"UNIT-03":[1.7,1.5]
 function renderWorkbenchFloat(){
   const box=$("#wbfloatsummary");if(!box)return;
   if(!wbBoard){
-    box.innerHTML=`<p style="color:var(--dim)">暂无任务快照，稍后再看。同步任务每 5 分钟把 3D 工作台的任务板推过来。</p>`;
+    box.innerHTML=`<p style="color:var(--dim)">暂无任务数据，稍后再看。</p>`;
     return;
   }
   const c=wbCounts(wbBoard),busy=wbBusySet(wbBoard);
@@ -771,7 +789,9 @@ function renderWorkbenchFloat(){
     if(!list.length)return `<div class="wb-group"><h4>${label}（0）</h4><div class="wb-empty">没有任务</div></div>`;
     return `<div class="wb-group"><h4>${label}（${list.length}）</h4>`+list.map(t=>{
       const src=wbSourceId(t.detail);
-      return `<div class="wb-task" data-station="${esc(t.station_id||"")}" data-task="${esc(String(t.id))}"><div>${esc(t.title||"")}</div><div class="wb-meta">${esc(wbStationName(t.station_id))}${src?` · 来源房消息 ${esc(src)}`:""} · 点我定位工位</div></div>`;
+      const prog=Array.isArray(t.progress)&&t.progress.length?t.progress[t.progress.length-1]:null;
+      const progHtml=prog?`<div class="wb-progress">${esc(prog.note||"")}<div class="wb-prog-time">${wbTimeStr(prog.ts)} · 共 ${t.progress.length} 条进度</div></div>`:"";
+      return `<div class="wb-task" data-station="${esc(t.station_id||"")}" data-task="${esc(String(t.id))}"><div>${esc(t.title||"")}</div>${progHtml}<div class="wb-meta">${esc(wbStationName(t.station_id))}${src?` · 来源房消息 ${esc(src)}`:""} · 点我定位工位</div></div>`;
     }).join("")+`</div>`;
   }).join("");
   box.innerHTML=`
@@ -779,7 +799,7 @@ function renderWorkbenchFloat(){
     <div class="wb-stations">${STATION_IDS.map(id=>`<span class="wb-station ${busy.has(id)?"busy":""}">${esc(wbStationName(id))} · ${busy.has(id)?"忙碌":"空闲"}</span>`).join("")}</div>
     ${groupHtml}`;
   box.querySelectorAll(".wb-task").forEach(el=>{
-    el.onclick=()=>{const st=el.getAttribute("data-station");if(st)wbFocusStation(st,el);};
+    el.onclick=()=>{const st=el.getAttribute("data-station");if(!st)return;const f=$("#wbfloat");if(f&&f.classList.contains("scene-collapsed"))wbToggleScene();wbFocusStation(st,el);};
   });
 }
 // ---- 手机 tab 页（≤900px）：聊天 / 工作台 / 审批 三页切换 ----
@@ -817,12 +837,30 @@ function setMobileTab(tab){
     scrollMsgsToBottom();
   }
 }
+// 3D 场景折叠：手机默认收起先看任务，桌面默认展开；选择记在本地
+const WB_SCENE_KEY="muse_chatroom_wb_scene";
+function wbSceneShouldOpen(){
+  try{const v=localStorage.getItem(WB_SCENE_KEY);if(v==="open")return true;if(v==="closed")return false;}catch{}
+  return !isMobile();
+}
+function wbApplyScene(){
+  const f=$("#wbfloat");if(!f)return;
+  const open=wbSceneShouldOpen();
+  f.classList.toggle("scene-collapsed",!open);
+  const b=$("#wbscenetoggle");if(b)b.textContent=open?"收起 3D":"展开 3D";
+  if(open&&wb3d&&wb3d.resize)wb3d.resize();
+}
+function wbToggleScene(){
+  const open=!wbSceneShouldOpen();
+  try{localStorage.setItem(WB_SCENE_KEY,open?"open":"closed");}catch{}
+  wbApplyScene();
+}
 function openWorkbenchFloat(){
   const f=$("#wbfloat");if(!f)return;
   renderWorkbenchFloat();
   f.classList.add("open");f.classList.remove("minimized");f.setAttribute("aria-hidden","false");
   initWorkbench3D();
-  if(wb3d&&wb3d.resize)wb3d.resize();
+  wbApplyScene();
 }
 function closeWorkbenchFloat(){const f=$("#wbfloat");if(!f)return;f.classList.remove("open");f.setAttribute("aria-hidden","true");}
 function minimizeWorkbenchFloat(){const f=$("#wbfloat");if(!f)return;f.classList.add("minimized");}
@@ -831,17 +869,29 @@ function toggleWorkbenchFloat(){
   if(f.classList.contains("open")&&!f.classList.contains("minimized")){closeWorkbenchFloat();}
   else{openWorkbenchFloat();}
 }
+function wbApplyBoard(){
+  renderWorkbenchEntry();
+  renderMobileTabBadges();
+  updateWorkbenchLights();
+  if(document.getElementById("wbfloat").classList.contains("open"))renderWorkbenchFloat();
+}
 async function loadWorkbenchBoard(){
   if(!me||!me.token)return;
+  try{
+    const r=await fetch(api+"/api/tasks",{headers:authHeaders()});
+    const d=await r.json();
+    if(!d.error&&Array.isArray(d.tasks)){
+      wbBoard=wbBoardFromTasks(d.tasks);wbUpdatedAt=new Date().toISOString();
+      wbApplyBoard();
+      return;
+    }
+  }catch{}
   try{
     const r=await fetch(api+"/api/workbench/board",{headers:authHeaders()});
     const d=await r.json();
     if(d.error)return;
     wbBoard=d.board||null;wbUpdatedAt=d.updated_at||null;
-    renderWorkbenchEntry();
-    renderMobileTabBadges();
-    updateWorkbenchLights();
-    if(document.getElementById("wbfloat").classList.contains("open"))renderWorkbenchFloat();
+    wbApplyBoard();
   }catch{}
 }
 // ---- 3D 工作台场景（轻量版办公室，Three.js CDN）----
@@ -1487,6 +1537,7 @@ curl -X POST ${api}/api/evaluate \\
   $("#wbclose").onclick=()=>{if(isMobile()&&mobileTab==="workbench"){setMobileTab("chat");}else{closeWorkbenchFloat();}};
   $("#wbmin").onclick=minimizeWorkbenchFloat;
   $("#wbreset").onclick=()=>{if(wb3d&&wb3d.resetView)wb3d.resetView();};
+  $("#wbscenetoggle").onclick=wbToggleScene;
   $("#wbzoomin").onclick=()=>{if(wb3d&&wb3d.orbit){wb3d.orbit.radius=Math.max(7,wb3d.orbit.radius-1.5);wb3d.orbit.auto=false;wb3d.applyCamera();}};
   $("#wbzoomout").onclick=()=>{if(wb3d&&wb3d.orbit){wb3d.orbit.radius=Math.min(20,wb3d.orbit.radius+1.5);wb3d.orbit.auto=false;wb3d.applyCamera();}};
   initWorkbenchFloatDrag();
