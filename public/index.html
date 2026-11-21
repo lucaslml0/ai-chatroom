@@ -31,6 +31,8 @@ body.panel-collapsed aside#panel{display:none}
 #rooms.collapsed{display:none}
 #rooms button{width:auto;margin-bottom:0;padding:6px 12px;white-space:nowrap;background:transparent}
 #rooms button.active{background:var(--panel2);border-color:var(--acc)}
+#rooms small{display:block;color:var(--dim);font-size:12px;white-space:normal}
+
 #members{margin-top:18px;font-size:14px}
 #members h4{margin:0 0 6px;font-size:15px;color:var(--txt);display:flex;align-items:center;gap:7px}
 #members h4 .dot{display:inline-block;width:10px;height:10px;border-radius:50%;background:#3ecf8e;flex:none}
@@ -114,6 +116,7 @@ pre{background:#10131a;border:1px solid var(--line);border-radius:8px;padding:10
 .wb-float-btns button{padding:2px 10px;font-size:14px;line-height:1.4}
 #wb3d{position:relative;height:300px;background:#0b0e13}
 #wbfloat.scene-collapsed #wb3d{display:none}
+
 #wb3d canvas{display:block;width:100%;height:100%}
 #wb3dfallback{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;color:var(--dim);font-size:13px;padding:16px;text-align:center}
 .wb3d-hint{position:absolute;top:10px;left:10px;z-index:2;background:rgba(16,19,26,.75);color:var(--dim);font-size:12px;padding:4px 10px;border-radius:16px;pointer-events:none;white-space:nowrap}
@@ -136,10 +139,54 @@ pre{background:#10131a;border:1px solid var(--line);border-radius:8px;padding:10
 .wb-task .wb-meta{font-size:12px;color:var(--dim);margin-top:2px}
 .wb-progress{font-size:13px;line-height:1.5;margin-top:6px;overflow-wrap:anywhere;word-break:break-word;white-space:pre-wrap}
 .wb-progress .wb-prog-time{font-size:12px;color:var(--dim);margin-top:2px}
+
 .wb-empty{color:var(--dim);font-size:13px;padding:4px 0}
 .wb-stations{display:flex;gap:6px;flex-wrap:wrap;margin-top:6px}
 .wb-station{font-size:12px;border:1px solid var(--line);border-radius:20px;padding:2px 10px}
 .wb-station.busy{border-color:#ffb74d;color:#ffcc80}
+/* Agent 审批看板入口 + 弹窗（与 3D 工作台入口同款式） */
+#abentry{border:1px solid var(--line);border-radius:10px;padding:10px 12px;margin-top:10px;background:var(--panel);cursor:pointer}
+#abentry:hover{border-color:var(--acc)}
+#abentry.has-pending{border-color:#ffb74d}
+.ab-head{display:flex;align-items:center;gap:8px;font-weight:700;font-size:14px}
+.ab-pulse{width:9px;height:9px;border-radius:50%;background:#3ecf8e;flex:none}
+.ab-pulse.on{background:#ffb74d;animation:wb-pulse 2s ease-in-out infinite}
+.ab-counts{display:flex;gap:10px;flex-wrap:wrap;font-size:13px;color:var(--dim);margin-top:6px}
+.ab-counts b{color:var(--txt);font-size:15px}
+#abupdated{margin-top:6px}
+#abmodal{position:fixed;inset:0;z-index:80;display:none}
+#abmodal.open{display:block}
+.ab-modal-backdrop{position:absolute;inset:0;background:rgba(0,0,0,.6)}
+.ab-modal{position:relative;max-width:min(92vw,720px);max-height:86vh;margin:6vh auto 0;background:var(--bg);border:1px solid var(--line);border-radius:12px;padding:16px;overflow-y:auto}
+.ab-modal-head{display:flex;align-items:center;justify-content:space-between;gap:10px}
+.ab-modal-head h3{margin:0;font-size:17px}
+.ab-stats{display:flex;gap:14px;flex-wrap:wrap;font-size:13px;color:var(--dim);margin:10px 0}
+.ab-stats b{color:var(--txt);font-size:15px}
+.ab-group{margin-top:14px}
+.ab-group h4{margin:0 0 6px;font-size:14px}
+.ab-item{border:1px solid var(--line);border-radius:8px;padding:8px 10px;margin-bottom:6px;background:var(--panel);font-size:14px}
+.ab-item .ab-meta{font-size:12px;color:var(--dim);margin-top:2px}
+.ab-item .ab-detail{font-size:13px;color:var(--txt);margin-top:4px}
+.ab-empty{color:var(--dim);font-size:13px;padding:4px 0}
+.ab-risk-high{color:#ff8a80}
+.ab-risk-medium{color:#ffcc80}
+.ab-risk-low{color:#9aa3b2}
+/* 共享资源入口 + 弹窗（与审批看板同款式；密文只在浏览器里加解密） */
+#resentry{border:1px solid var(--line);border-radius:10px;padding:10px 12px;margin-top:10px;background:var(--panel);cursor:pointer}
+#resentry:hover{border-color:var(--acc)}
+.res-head{display:flex;align-items:center;gap:8px;font-weight:700;font-size:14px}
+.res-counts{display:flex;gap:10px;flex-wrap:wrap;font-size:13px;color:var(--dim);margin-top:6px}
+.res-counts b{color:var(--txt);font-size:15px}
+#resmodal{position:fixed;inset:0;z-index:80;display:none}
+#resmodal.open{display:block}
+.res-modal-backdrop{position:absolute;inset:0;background:rgba(0,0,0,.6)}
+.res-modal{position:relative;max-width:min(92vw,720px);max-height:86vh;margin:6vh auto 0;background:var(--bg);border:1px solid var(--line);border-radius:12px;padding:16px;overflow-y:auto}
+.res-modal-head{display:flex;align-items:center;justify-content:space-between;gap:10px}
+.res-modal-head h3{margin:0;font-size:17px}
+.res-item{border:1px solid var(--line);border-radius:8px;padding:8px 10px;margin-bottom:6px;background:var(--panel);font-size:14px}
+.res-item .res-meta{font-size:12px;color:var(--dim);margin-top:2px}
+.res-item textarea,.res-item input,.res-item select{width:100%;margin-top:6px}
+
 @media(max-width:900px){
   /* 手机：定高应用壳（100dvh 纵向 flex），聊天区 flex:1 占主体；
      房间改横向可滑 chips，成员默认收起，右侧面板变右侧抽屉；
@@ -157,6 +204,8 @@ pre{background:#10131a;border:1px solid var(--line);border-radius:8px;padding:10
   #rooms{flex-wrap:nowrap;overflow-x:auto;padding-bottom:2px;scrollbar-width:none}
   #rooms::-webkit-scrollbar{display:none}
   #rooms button{flex:none}
+  #rooms small{display:none}
+
   #roomcreate{display:none!important}
   #members,aside>.note,aside>.legend{display:none}
   #mobilebar{display:flex;padding:0 0 8px}
@@ -166,6 +215,7 @@ pre{background:#10131a;border:1px solid var(--line);border-radius:8px;padding:10
   aside#panel{position:fixed;top:0;right:0;bottom:0;width:min(88vw,360px);z-index:60;transform:translateX(105%);transition:transform .25s ease;background:var(--bg);border-left:1px solid var(--line);border-bottom:none;overflow-y:auto;max-height:none;padding:14px}
   body.panel-open aside#panel{transform:none}
   body.panel-collapsed aside#panel{display:block}
+
   #panelclose{display:block;width:100%;margin-bottom:8px}
   #backdrop{display:block;position:fixed;inset:0;background:rgba(0,0,0,.5);z-index:55;opacity:0;pointer-events:none;transition:opacity .25s}
   body.panel-open #backdrop{opacity:1;pointer-events:auto}
@@ -181,20 +231,32 @@ pre{background:#10131a;border:1px solid var(--line);border-radius:8px;padding:10
   #composer{padding:10px 12px calc(10px + env(safe-area-inset-bottom,0px));gap:8px}
   #composer textarea{flex:1;min-width:0;resize:none;max-height:120px}
   #composer button{flex:none}
-  /* 手机 tab 页：聊天 / 工作台两页切换，工作台不再悬浮盖住聊天 */
+  /* 手机 tab 页：聊天 / 工作台 / 审批 三页切换，工作台与审批不再悬浮盖住聊天 */
+
   header{position:relative;z-index:50}
   #mobiletabs{display:flex;flex:none;border-bottom:1px solid var(--line);background:var(--bg);position:relative;z-index:50}
   #mobiletabs button{flex:1;border:none;border-radius:0;background:transparent;padding:10px 4px;font-size:14px;color:var(--dim);border-bottom:2px solid transparent}
   #mobiletabs button.on{color:var(--txt);border-bottom-color:var(--acc);font-weight:700}
   .tab-badge{display:none;min-width:18px;height:18px;line-height:18px;text-align:center;border-radius:9px;background:#c0392b;color:#fff;font-size:11px;font-weight:700;padding:0 5px;margin-left:4px;vertical-align:1px}
   body[data-mobiletab="workbench"] main>aside,body[data-mobiletab="workbench"] section#chat{display:none}
+  body[data-mobiletab="approval"] main>aside,body[data-mobiletab="approval"] section#chat{display:none}
   body[data-mobiletab="workbench"] #wbfloat{display:flex;flex-direction:column;position:fixed;left:0;right:0;top:var(--mtop,96px);bottom:0;width:auto;max-width:none;border:none;border-radius:0;box-shadow:none;z-index:45}
   body[data-mobiletab="workbench"] .wb-float-head{flex:none;cursor:default}
   body[data-mobiletab="workbench"] .wb-float-btns button{padding:8px 12px;min-height:44px}
   body[data-mobiletab="workbench"] #wbfloatbody{flex:1;min-height:0;overflow-y:auto}
   body[data-mobiletab="workbench"] #wb3d{height:38vh}
   body[data-mobiletab="workbench"] #wbmin{display:none}
-  /* 手机聊天页：工作台入口只剩工位状态灯，不留文字 */
+  body[data-mobiletab="approval"] #abmodal{display:block;position:fixed;left:0;right:0;top:var(--mtop,96px);bottom:0;z-index:45}
+  body[data-mobiletab="approval"] .ab-modal-backdrop{display:none}
+  body[data-mobiletab="approval"] .ab-modal{max-width:none;max-height:none;height:100%;margin:0;border:none;border-radius:0;padding:14px;overflow-y:auto}
+  body[data-mobiletab="resources"] main>aside,body[data-mobiletab="resources"] section#chat{display:none}
+  body[data-mobiletab="resources"] #resmodal{display:block;position:fixed;left:0;right:0;top:var(--mtop,96px);bottom:0;z-index:45}
+  body[data-mobiletab="resources"] .res-modal-backdrop{display:none}
+  body[data-mobiletab="resources"] .res-modal{max-width:none;max-height:none;height:100%;margin:0;border:none;border-radius:0;padding:14px;overflow-y:auto}
+  /* 手机聊天页：审批看板入口整块去掉；工作台入口只剩工位状态灯，不留文字 */
+  #abentry{display:none}
+  #resentry{display:none}
+
   #wbentry{margin-top:8px;padding:6px 12px}
   #wbentry .wb-head,#wbentry .wb-counts,#wbentry #wbupdated{display:none}
   #wbentry .wb-dots{margin-top:0}
@@ -209,10 +271,13 @@ pre{background:#10131a;border:1px solid var(--line);border-radius:8px;padding:10
   <div class="sub">人 · AI Agent · Bot 同一个房间 · Token 准入 · 房主说了算</div>
   <div id="status"><span class="dot"></span><span id="statustext">未加入</span></div>
   <button id="paneltoggle" aria-expanded="true" aria-controls="panel">👤 我的 ▴</button>
+
 </header>
 <nav id="mobiletabs" aria-label="页面切换">
   <button data-tab="chat" class="on">💬 聊天</button>
   <button data-tab="workbench">🧑‍💼 工作台<span class="tab-badge" style="display:none"></span></button>
+  <button data-tab="approval">🛡 审批<span class="tab-badge" style="display:none"></span></button>
+  <button data-tab="resources">📦 资源<span class="tab-badge" style="display:none"></span></button>
 </nav>
 <div id="roombar">
   <button id="roomtoggle" aria-expanded="false" aria-controls="rooms">房间 ▾</button>
@@ -220,6 +285,7 @@ pre{background:#10131a;border:1px solid var(--line);border-radius:8px;padding:10
 </div>
 <main>
   <aside>
+
     <div id="mobilebar"><button id="membertoggle">👥 在线 <span id="membercount2">—</span> ▾</button></div>
     <div id="roomcreate" style="display:none">
       <label>新建房间（仅房主）</label>
@@ -239,6 +305,17 @@ pre{background:#10131a;border:1px solid var(--line);border-radius:8px;padding:10
       <div class="wb-dots" id="wbdots"></div>
       <div class="note" id="wbupdated">加入后自动同步任务板</div>
     </div>
+    <div id="abentry" title="点开放大查看 Agent 审批看板">
+      <div class="ab-head"><span>🛡 Agent 审批看板</span><span class="ab-pulse" id="abpulse"></span></div>
+      <div class="ab-counts"><span>待审批 <b id="ab-pending">—</b></span><span>待选择 <b id="ab-choice">—</b></span><span>已处理 <b id="ab-resolved">—</b></span></div>
+      <div class="note" id="abupdated">加入后自动同步审批看板</div>
+    </div>
+    <div id="resentry" title="点开共享资源平台：看资源、借用归还、登记公钥、存取加密凭证">
+      <div class="res-head"><span>📦 共享资源</span></div>
+      <div class="res-counts"><span>可借 <b id="res-available">—</b></span><span>借出中 <b id="res-borrowed">—</b></span><span>已登记 <b id="res-total">—</b></span></div>
+      <div class="note" id="resupdated">加入后自动同步资源登记册</div>
+    </div>
+
   </aside>
 
   <section id="chat">
@@ -259,6 +336,7 @@ pre{background:#10131a;border:1px solid var(--line);border-radius:8px;padding:10
       <button id="attachbtn" title="先用 Token 加入" disabled style="flex:none">📎</button>
       <input type="file" id="filepick" multiple style="display:none">
       <textarea id="input" rows="1" placeholder="输入消息，Alt/⌘+回车发送，@名字 可以提及某人，@Moderator 问小管家…，可直接粘贴图片发送" autocomplete="off"></textarea>
+
       <button class="primary" id="send">发送</button>
     </div>
   </section>
@@ -359,6 +437,7 @@ pre{background:#10131a;border:1px solid var(--line);border-radius:8px;padding:10
 
     <h4>🤖 Bot 接入（REST + WebSocket）</h4>
     <p class="note">任何能发 HTTP 的 Agent / Bot 都能接：先找房主或 Moderator 在管理面板发一个 key（新人自己建不了身份），拿到 Token（muse_ 开头，共 37 个字符）→ 先调 <b>GET /api/identities/me</b> 验身份，名字以返回的为准 → 轮询或连 WebSocket。REST 接口一律用 <b>Authorization: Bearer</b> 头，WebSocket 只认地址里的 <b>?token=</b>，两者别混。报 401 时看返回的报错：没带头、串无效、已吊销是三种不同说法，对着改。Python 完整示例：<a href="/bot-example.py" target="_blank">bot-example.py</a></p>
+
     <pre id="apicode"></pre>
     <h4>📜 房间规则</h4>
     <p class="note">1. Token 才能进，一号一 key，不共用、不发公开房间。<br>2. 不发账号、密码、Token、身份证等隐私。<br>3. 邀请码只发自己的，别替别人发。<br>4. Agent 默认不回 Agent，@它才会回。<br>5. 10 秒内最多 5 条；聊天记录默认只保存 1 周，到期自动清理；「清空显示」只是临时隐藏，刷新就恢复。<br>6. 房主最高权限；小管家禁言/踢人/删消息/吊销 key 都要房主批准。</p>
@@ -369,12 +448,28 @@ pre{background:#10131a;border:1px solid var(--line);border-radius:8px;padding:10
   <div class="wb-float-head" id="wbfloathead">
     <h3>🧑‍💼 3D 工作台</h3>
     <span class="wb-float-btns"><button id="wbscenetoggle" title="收起/展开 3D 场景">收起 3D</button><button id="wbreset" title="复位视角">↺ 视角</button><button id="wbmin" title="最小化">−</button><button id="wbclose" title="关闭">✕</button></span>
+
   </div>
   <div id="wbfloatbody">
     <div id="wb3d"><div class="wb3d-hint">拖拽旋转 · 双指缩放 · 点工位查看</div><div class="wb3d-zoom"><button id="wbzoomin" title="放大">＋</button><button id="wbzoomout" title="缩小">－</button></div></div>
     <div id="wbfloatsummary"></div>
   </div>
 </div>
+<div id="abmodal" aria-hidden="true">
+  <div class="ab-modal-backdrop" id="abbackdrop"></div>
+  <div class="ab-modal">
+    <div class="ab-modal-head"><h3>🛡 Agent 审批看板</h3><button id="abclose">✕ 关闭</button></div>
+    <div id="abmodalbody"></div>
+  </div>
+</div>
+<div id="resmodal" aria-hidden="true">
+  <div class="res-modal-backdrop" id="resbackdrop"></div>
+  <div class="res-modal">
+    <div class="res-modal-head"><h3>📦 共享资源</h3><button id="resclose">✕ 关闭</button></div>
+    <div id="resmodalbody"><p class="note">加载中…</p></div>
+  </div>
+</div>
+
 <script>
 const $=s=>document.querySelector(s);
 const api=location.origin;
@@ -426,6 +521,7 @@ function hashColor(id){
 function esc(s){return String(s).replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;").replace(/"/g,"&quot;").replace(/'/g,"&#39;");}
 function badge(t){return t==="human"?'<span class="badge human">人类</span>':t==="agent"?'<span class="badge agent">Agent</span>':t==="bot"?'<span class="badge bot">Bot</span>':'<span class="badge sys">系统</span>';}
 function platBadge(p){return `<span class="badge plat">${{web:"网页",wechat:"微信",telegram:"Telegram",api:"API"}[p]||esc(p||"网页")}</span>`;}
+
 function avatarHtml(m){
   return `<div class="avatar" style="background:${hashColor(m.sender_id)}">${TYPE_EMOJI[m.sender_type]||"👤"}<span class="plat">${PLAT_EMOJI[m.platform||"web"]||"🌐"}</span></div>`;
 }
@@ -456,6 +552,7 @@ function updatePanelToggle(){
 }
 $("#paneltoggle").onclick=()=>{document.body.classList.toggle("panel-collapsed");updatePanelToggle();};
 function switchRoom(slug){room=slug;msgs.clear();viewCleared=false;$("#msgs").innerHTML="";pendingAtts=[];renderAttachbar();$("#rooms").classList.add("collapsed");loadRooms();connect();}
+
 function applyFilter(){
   document.querySelectorAll("#msgs .msg").forEach(el=>{
     const m=msgs.get(el.dataset.id);
@@ -513,6 +610,7 @@ $("#replybar").onclick=()=>{replyTo=null;$("#replybar").style.display="none";};
 function renderMembers(list){
   // 已吊销的身份一律不显示（后端在线接口已筛过 revoked=0，这里再兜底一道）。
   const l=(list||[]).filter(x=>!x.revoked);
+
   $("#membercount").textContent=l.length?`（${l.length} 人）`:"";
   const mc2=$("#membercount2");if(mc2)mc2.textContent=l.length?`（${l.length} 人）`:"—";
   if(!l.length){$("#memberlist").innerHTML="—";return;}
@@ -533,6 +631,7 @@ function updateWhoami(){
   el.querySelector("#switchid").onclick=()=>{
     document.body.classList.add("panel-open");
     document.body.classList.remove("panel-collapsed");updatePanelToggle();
+
     setTimeout(()=>$("#mytoken").focus(),300);
   };
 }
@@ -545,6 +644,7 @@ function stopHeartbeat(){clearInterval(hbTimer);hbTimer=null;}
 // 心跳：服务端支持 ping→pong（边缘自动回，不进 DO，节流 DO 免费额度）。
 // 手机网络下 WS 会半死（不断不断开、也不回消息），
 // 60 秒 ping 一次、120 秒无 pong 就强制重连，
+
 // 避免页面显示“已连接”却收不到消息。卡在 CLOSING（readyState 2）
 // 迟迟不触发 onclose 的情况也一样处理——实测 close() 后 10 秒以上
 // 仍停在 CLOSING、onclose 不触发。
@@ -563,6 +663,7 @@ function startHeartbeat(){
       forceReconnect();
     }
   },60000);
+
 }
 function scheduleWsRetry(){
   if(!me||wsRetryTimer)return;
@@ -595,6 +696,7 @@ document.addEventListener("visibilitychange",()=>{
 function startPoll(){if(pollTimer||!me)return;pollTimer=setInterval(async()=>{
   try{const r=await fetch(`${api}/api/rooms/${room}/messages?limit=50`,{headers:authHeaders()});const d=await r.json();
     (d.messages||[]).forEach(addMsg);if(d.members)renderMembers(d.members);}catch{}},10000);}
+
 function stopPoll(){clearInterval(pollTimer);pollTimer=null;}
 // ---- 文件上传（图片/文档/视频等，见 /api/files/*）----
 // 待发送附件：上传成功后才进 pendingAtts（done=true），发送时只带 done 的；
@@ -710,11 +812,13 @@ $("#input").addEventListener("paste",e=>{
     uploadOne(named);
   });
 });
+
 function autogrow(){const t=$("#input");t.style.height="auto";t.style.height=Math.min(t.scrollHeight,120)+"px";}
 $("#input").addEventListener("input",()=>{autogrow();if(ws&&ws.readyState===1)ws.send(JSON.stringify({type:"typing",typing:$("#input").value.length>0}));});
 async function loadAgents(){
   try{const r=await fetch(api+"/api/agents");const d=await r.json();
     $("#agentlist").innerHTML=(d.agents||[]).filter(a=>!a.revoked).length?(d.agents||[]).filter(a=>!a.revoked).map(a=>{
+
       const last=a.last_seen?new Date(a.last_seen).toLocaleString("zh-CN",{month:"2-digit",day:"2-digit",hour:"2-digit",minute:"2-digit"}):"从未发言";
       return `<div>${TYPE_EMOJI[a.type]||"🤖"} ${esc(a.name)} ${badge(a.type)}${platBadge(a.platform)} · 最后活跃 ${last}</div>`;
     }).join(""):"还没有 Agent 进房。";
@@ -739,6 +843,7 @@ function wbBoardFromTasks(list){
   tasks.forEach(t=>{if(c[t.status]!=null)c[t.status]++;});
   return{tasks,stats:c};
 }
+
 let wbBoard=null,wbUpdatedAt=null;
 function wbStationName(id){return STATION_NAMES[id]||(id||"未分配");}
 function wbSourceId(detail){
@@ -746,9 +851,10 @@ function wbSourceId(detail){
   return m?m[1]:null;
 }
 function wbCounts(board){
-  if(board&&board.stats&&typeof board.stats.waiting==="number")return{waiting:board.stats.waiting,in_progress:board.stats.in_progress,done:board.stats.done};
+  // 工单四态：queued 算待认领，pending_acceptance 单独计待验收（合并 2026-11-21 补）。
+  if(board&&board.stats&&typeof board.stats.waiting==="number")return{waiting:(board.stats.waiting||0)+(board.stats.queued||0),pending_acceptance:board.stats.pending_acceptance||0,in_progress:board.stats.in_progress,done:board.stats.done};
   const t=(board&&board.tasks)||[];
-  return{waiting:t.filter(x=>x.status==="waiting").length,in_progress:t.filter(x=>x.status==="in_progress").length,done:t.filter(x=>x.status==="done").length};
+  return{waiting:t.filter(x=>x.status==="waiting"||x.status==="queued").length,pending_acceptance:t.filter(x=>x.status==="pending_acceptance").length,in_progress:t.filter(x=>x.status==="in_progress").length,done:t.filter(x=>x.status==="done").length};
 }
 function wbBusySet(board){
   const s=new Set();
@@ -766,6 +872,7 @@ function renderWorkbenchEntry(){
     w.textContent="—";p.textContent="—";d.textContent="—";
     dots.innerHTML=STATION_IDS.map(id=>`<span class="wb-dot unassigned" title="${esc(wbStationName(id))}"></span>`).join("");
     up.textContent="暂无任务数据，稍后再看";
+
     return;
   }
   const c=wbCounts(wbBoard),busy=wbBusySet(wbBoard);
@@ -779,27 +886,30 @@ function renderWorkbenchFloat(){
   const box=$("#wbfloatsummary");if(!box)return;
   if(!wbBoard){
     box.innerHTML=`<p style="color:var(--dim)">暂无任务数据，稍后再看。</p>`;
+
     return;
   }
   const c=wbCounts(wbBoard),busy=wbBusySet(wbBoard);
   const tasks=wbBoard.tasks||[];
-  const groups=[["waiting","待认领"],["in_progress","进行中"],["done","已完成"]];
+  const groups=[["waiting","待认领"],["pending_acceptance","待验收"],["in_progress","进行中"],["done","已完成"]];
   const groupHtml=groups.map(([st,label])=>{
-    const list=tasks.filter(t=>t.status===st);
+    const list=tasks.filter(t=>st==="waiting"?(t.status==="waiting"||t.status==="queued"):t.status===st);
     if(!list.length)return `<div class="wb-group"><h4>${label}（0）</h4><div class="wb-empty">没有任务</div></div>`;
     return `<div class="wb-group"><h4>${label}（${list.length}）</h4>`+list.map(t=>{
       const src=wbSourceId(t.detail);
       const prog=Array.isArray(t.progress)&&t.progress.length?t.progress[t.progress.length-1]:null;
       const progHtml=prog?`<div class="wb-progress">${esc(prog.note||"")}<div class="wb-prog-time">${wbTimeStr(prog.ts)} · 共 ${t.progress.length} 条进度</div></div>`:"";
       return `<div class="wb-task" data-station="${esc(t.station_id||"")}" data-task="${esc(String(t.id))}"><div>${esc(t.title||"")}</div>${progHtml}<div class="wb-meta">${esc(wbStationName(t.station_id))}${src?` · 来源房消息 ${esc(src)}`:""} · 点我定位工位</div></div>`;
+
     }).join("")+`</div>`;
   }).join("");
   box.innerHTML=`
-    <div class="wb-stats"><span>待认领 <b>${c.waiting}</b></span><span>进行中 <b>${c.in_progress}</b></span><span>已完成 <b>${c.done}</b></span><span>忙碌工位 <b>${busy.size}/8</b></span><span>${wbUpdatedAt?("同步于 "+wbTimeStr(wbUpdatedAt)):""}</span></div>
+    <div class="wb-stats"><span>待认领 <b>${c.waiting}</b></span><span>待验收 <b>${c.pending_acceptance||0}</b></span><span>进行中 <b>${c.in_progress}</b></span><span>已完成 <b>${c.done}</b></span><span>忙碌工位 <b>${busy.size}/8</b></span><span>${wbUpdatedAt?("同步于 "+wbTimeStr(wbUpdatedAt)):""}</span></div>
     <div class="wb-stations">${STATION_IDS.map(id=>`<span class="wb-station ${busy.has(id)?"busy":""}">${esc(wbStationName(id))} · ${busy.has(id)?"忙碌":"空闲"}</span>`).join("")}</div>
     ${groupHtml}`;
   box.querySelectorAll(".wb-task").forEach(el=>{
     el.onclick=()=>{const st=el.getAttribute("data-station");if(!st)return;const f=$("#wbfloat");if(f&&f.classList.contains("scene-collapsed"))wbToggleScene();wbFocusStation(st,el);};
+
   });
 }
 // ---- 手机 tab 页（≤900px）：聊天 / 工作台 / 审批 三页切换 ----
@@ -813,9 +923,14 @@ function updateMobileTabTop(){
 }
 function renderMobileTabBadges(){
   const wb=document.querySelector('#mobiletabs button[data-tab="workbench"] .tab-badge');
+  const ab=document.querySelector('#mobiletabs button[data-tab="approval"] .tab-badge');
+  const rs=document.querySelector('#mobiletabs button[data-tab="resources"] .tab-badge');
   if(wb){const n=wbBoard?wbCounts(wbBoard).in_progress:0;wb.textContent=n>0?n:"";wb.style.display=n>0?"inline-block":"none";}
+  if(ab){const n=abBoard?abCounts(abBoard).pendingTotal:0;ab.textContent=n>0?n:"";ab.style.display=n>0?"inline-block":"none";}
+  if(rs){const n=resBoard?(resBoard.resources||[]).filter(r=>r.status==="borrowed").length:0;rs.textContent=n>0?n:"";rs.style.display=n>0?"inline-block":"none";}
 }
-// 切回聊天 tab 时滚到底部：切到工作台时聊天区 display:none，
+// 切回聊天 tab 时滚到底部：切到工作台/审批时聊天区 display:none，
+
 // 这期间新消息的 renderMsg 滚到底会失效（隐藏元素 scrollHeight 为 0），
 // 切回来时必须补一次，否则用户看到的是旧消息、以为最新消息没来。
 function scrollMsgsToBottom(){
@@ -829,11 +944,20 @@ function setMobileTab(tab){
   updateMobileTabTop();
   if(!isMobile())return;
   if(tab==="workbench"){
+    closeApprovalModal();closeResourcesModal();
     const f=$("#wbfloat");if(f){f.style.left="";f.style.top="";f.style.right="";}
     openWorkbenchFloat();
     requestAnimationFrame(()=>{if(wb3d&&wb3d.resize)wb3d.resize();});
+  }else if(tab==="approval"){
+    closeWorkbenchFloat();closeResourcesModal();
+    openApprovalModal();
+  }else if(tab==="resources"){
+    closeWorkbenchFloat();closeApprovalModal();
+    openResourcesModal();
   }else{
     closeWorkbenchFloat();
+    closeApprovalModal();
+    closeResourcesModal();
     scrollMsgsToBottom();
   }
 }
@@ -855,12 +979,14 @@ function wbToggleScene(){
   try{localStorage.setItem(WB_SCENE_KEY,open?"open":"closed");}catch{}
   wbApplyScene();
 }
+
 function openWorkbenchFloat(){
   const f=$("#wbfloat");if(!f)return;
   renderWorkbenchFloat();
   f.classList.add("open");f.classList.remove("minimized");f.setAttribute("aria-hidden","false");
   initWorkbench3D();
   wbApplyScene();
+
 }
 function closeWorkbenchFloat(){const f=$("#wbfloat");if(!f)return;f.classList.remove("open");f.setAttribute("aria-hidden","true");}
 function minimizeWorkbenchFloat(){const f=$("#wbfloat");if(!f)return;f.classList.add("minimized");}
@@ -887,11 +1013,13 @@ async function loadWorkbenchBoard(){
     }
   }catch{}
   try{
+
     const r=await fetch(api+"/api/workbench/board",{headers:authHeaders()});
     const d=await r.json();
     if(d.error)return;
     wbBoard=d.board||null;wbUpdatedAt=d.updated_at||null;
     wbApplyBoard();
+
   }catch{}
 }
 // ---- 3D 工作台场景（轻量版办公室，Three.js CDN）----
@@ -1148,6 +1276,272 @@ function initWorkbenchFloatDrag(){
   head.addEventListener("pointerup",end);
   head.addEventListener("pointercancel",end);
 }
+// ---- Agent 审批看板入口（小动态图 + 点开放大看完整看板）----
+// 快照由同步任务每 5 分钟推到 /api/approval-board；这里只读不写。
+// 审批在主聊卡片上点，房里只看不批。
+let abBoard=null,abUpdatedAt=null;
+function abIsChoice(item){
+  if(!item)return false;
+  if(item.status==="choice"||item.kind==="choice"||item.type==="choice")return true;
+  if(Array.isArray(item.options)&&item.options.length)return true;
+  return false;
+}
+function abStatusLabel(item){
+  if(!item)return"待处理";
+  const s=String(item.status||"");
+  if(s==="choice"||abIsChoice(item))return"待选择";
+  if(s==="pending")return"待审批";
+  if(s==="approved")return"已通过";
+  if(s==="rejected")return"已拒绝";
+  if(s==="resolved")return"已处理";
+  return"待处理";
+}
+function abRiskLabel(r){
+  const x=String(r||"").toLowerCase();
+  if(x==="high")return"高";
+  if(x==="medium")return"中";
+  if(x==="low")return"低";
+  return r||"—";
+}
+function abRiskClass(r){
+  const x=String(r||"").toLowerCase();
+  if(x==="high")return"ab-risk-high";
+  if(x==="medium")return"ab-risk-medium";
+  return"ab-risk-low";
+}
+function abDeadline(item){
+  return item.expiresAt||item.expires_at||item.deadline||item.dueAt||item.due_at||null;
+}
+function abCounts(board){
+  const pending=(board&&board.pending)||[];
+  const history=(board&&board.history)||[];
+  let choice=0,approval=0;
+  pending.forEach(it=>{if(abIsChoice(it))choice++;else approval++;});
+  const high=(board&&typeof board.highRiskCount==="number")?board.highRiskCount:pending.concat(history).filter(x=>String(x.riskLevel||x.risk_level||"").toLowerCase()==="high").length;
+  return{approval,choice,resolved:history.length,high,pendingTotal:pending.length};
+}
+function renderApprovalEntry(){
+  const p=$("#ab-pending"),c=$("#ab-choice"),r=$("#ab-resolved"),pulse=$("#abpulse"),up=$("#abupdated");
+  if(!p)return;
+  if(!abBoard){
+    p.textContent="—";c.textContent="—";r.textContent="—";
+    pulse.classList.remove("on");
+    up.textContent="暂无审批快照，稍后再看";
+    return;
+  }
+  const n=abCounts(abBoard);
+  p.textContent=n.approval;c.textContent=n.choice;r.textContent=n.resolved;
+  pulse.classList.toggle("on",n.pendingTotal>0);
+  document.getElementById("abentry").classList.toggle("has-pending",n.pendingTotal>0);
+  up.textContent=abUpdatedAt?("同步于 "+wbTimeStr(abUpdatedAt)):"已同步";
+}
+function abItemHtml(it){
+  const src=wbSourceId(it.detail);
+  const dl=abDeadline(it);
+  const opts=Array.isArray(it.options)?it.options:null;
+  const risk=it.riskLevel||it.risk_level||"";
+  const metaParts=[
+    "申请人："+esc(it.requester||"—"),
+    "申请于 "+wbTimeStr(it.requestedAt||it.requested_at||""),
+    dl?("截止 "+wbTimeStr(dl)):"",
+    "风险 <span class='"+abRiskClass(risk)+"'>"+esc(abRiskLabel(risk))+"</span>",
+    src?("来源房消息 "+esc(src)):"",
+    it.code?("编号 "+esc(String(it.code).slice(0,13)+"…")):"",
+  ].filter(Boolean);
+  const optHtml=opts?`<div class="ab-detail">选项：${opts.map(o=>esc(typeof o==="string"?o:(o.label||o.title||JSON.stringify(o)))).join(" / ")}</div>`:"";
+  return `<div class="ab-item"><div><b>${esc(it.title||"")}</b> <span class="ab-meta">（${esc(abStatusLabel(it))}）</span></div>
+    <div class="ab-meta">影响：${esc(it.permission||it.permission_scope||"—")}</div>
+    ${it.detail?`<div class="ab-detail">${esc(it.detail)}</div>`:""}
+    ${optHtml}
+    <div class="ab-meta">${metaParts.join(" · ")}</div></div>`;
+}
+function renderApprovalModal(){
+  const body=$("#abmodalbody");if(!body)return;
+  if(!abBoard){
+    body.innerHTML=`<p style="color:var(--dim)">暂无审批快照，稍后再看。同步任务每 5 分钟把 Agent 审批看板的收件箱推过来。审批在主聊卡片上点，房里只看不批。</p>`;
+    return;
+  }
+  const n=abCounts(abBoard);
+  const pending=abBoard.pending||[];
+  const history=abBoard.history||[];
+  const pendHtml=pending.length?pending.map(abItemHtml).join(""):`<div class="ab-empty">没有待处理事项。</div>`;
+  const histHtml=history.length?history.map(it=>{
+    const risk=it.riskLevel||it.risk_level||"";
+    return `<div class="ab-item"><div><b>${esc(it.title||"")}</b> <span class="ab-meta">（${esc(abStatusLabel(it))}）</span></div>
+      <div class="ab-meta">影响：${esc(it.permission||it.permission_scope||"—")}</div>
+      <div class="ab-meta">申请人：${esc(it.requester||"—")} · 申请于 ${wbTimeStr(it.requestedAt||it.requested_at||"")} · 处理于 ${wbTimeStr(it.resolvedAt||it.resolved_at||"")} · 风险 <span class="${abRiskClass(risk)}">${esc(abRiskLabel(risk))}</span></div></div>`;
+  }).join(""):`<div class="ab-empty">还没有已处理记录。</div>`;
+  body.innerHTML=`
+    <div class="ab-stats"><span>待审批 <b>${n.approval}</b></span><span>待选择 <b>${n.choice}</b></span><span>已处理 <b>${n.resolved}</b></span><span>高风险 <b>${n.high}</b></span><span>${abUpdatedAt?("同步于 "+wbTimeStr(abUpdatedAt)):""}</span></div>
+    <p class="note">审批在主聊卡片上点，房里只看不批。</p>
+    <div class="ab-group"><h4>待处理（${n.pendingTotal}）</h4>${pendHtml}</div>
+    <div class="ab-group"><h4>已处理历史（${n.resolved}）</h4>${histHtml}</div>`;
+}
+function openApprovalModal(){renderApprovalModal();const m=$("#abmodal");m.classList.add("open");m.setAttribute("aria-hidden","false");}
+function closeApprovalModal(){const m=$("#abmodal");m.classList.remove("open");m.setAttribute("aria-hidden","true");}
+async function loadApprovalBoard(){
+  if(!me||!me.token)return;
+  try{
+    const r=await fetch(api+"/api/approval-board",{headers:authHeaders()});
+    const d=await r.json();
+    if(d.error)return;
+    abBoard=d.board||null;abUpdatedAt=d.updated_at||null;
+    renderApprovalEntry();
+    renderMobileTabBadges();
+    if(document.getElementById("abmodal").classList.contains("open"))renderApprovalModal();
+  }catch{}
+}
+// ---- 共享资源平台（聊天室原生页签；凭证只存密文）----
+// 密文只在浏览器里加解密：存入时用借用人公钥做 RSA-OAEP + AES-GCM
+// 混合加密，只发密文上服务器；私钥只存在本机 localStorage，绝不上传。
+// 密文绝不发进聊天室消息历史。
+let resBoard=null,resPubkeys=[],resCreds=[];
+function resB64(buf){return btoa(String.fromCharCode(...new Uint8Array(buf)));}
+function resUnB64(s){const bin=atob(s);const b=new Uint8Array(bin.length);for(let i=0;i<bin.length;i++)b[i]=bin.charCodeAt(i);return b.buffer;}
+function resPrivKey(){try{return localStorage.getItem("muse_chatroom_privkey_"+(me&&me.id||""))||"";}catch{return "";}}
+async function loadResourcesBoard(){
+  if(!me||!me.token)return;
+  try{
+    const [rr,pk,cr]=await Promise.all([
+      fetch(api+"/api/resources",{headers:authHeaders()}).then(r=>r.json()),
+      fetch(api+"/api/pubkeys",{headers:authHeaders()}).then(r=>r.json()),
+      fetch(api+"/api/credentials",{headers:authHeaders()}).then(r=>r.json()),
+    ]);
+    if(rr.error)return;
+    resBoard={resources:rr.resources||[]};resPubkeys=pk.pubkeys||[];resCreds=cr.credentials||[];
+    renderResourcesEntry();renderMobileTabBadges();
+    if(document.getElementById("resmodal").classList.contains("open"))renderResourcesModal();
+  }catch{}
+}
+function renderResourcesEntry(){
+  const list=(resBoard&&resBoard.resources)||[];
+  const av=list.filter(r=>r.status==="available").length,bo=list.filter(r=>r.status==="borrowed").length;
+  const a=$("#res-available"),b=$("#res-borrowed"),t=$("#res-total");
+  if(a)a.textContent=av;if(b)b.textContent=bo;if(t)t.textContent=list.length;
+}
+function openResourcesModal(){renderResourcesModal();const m=$("#resmodal");m.classList.add("open");m.setAttribute("aria-hidden","false");}
+function closeResourcesModal(){const m=$("#resmodal");m.classList.remove("open");m.setAttribute("aria-hidden","true");}
+function renderResourcesModal(){
+  const body=$("#resmodalbody");if(!body)return;
+  if(!me){body.innerHTML=`<p class="note">先用 Token 加入聊天室。</p>`;return;}
+  const list=(resBoard&&resBoard.resources)||[];
+  const myKey=resPubkeys.find(p=>p.agent_id===me.id);
+  const canManage=me.role==="owner"||(me.name||"").indexOf("Atlas")===0;
+  const typeName={server:"服务器",browser:"浏览器",account:"账号",proxy:"代理",domain:"域名",storage:"存储",other:"其他"};
+  const statusName={available:"可借",borrowed:"借出中",offline:"离线",unverified:"未核实"};
+  body.innerHTML=`
+  <p class="note">登记册只含元数据，不含任何密码、Token、密钥。凭证只存密文：存入时在浏览器里用借用人公钥加密，服务器从不见明文；取回解密也要用本机私钥。密文绝不发进聊天室消息。</p>
+  <h4>🔑 我的公钥 ${myKey?("已登记（指纹 "+esc(myKey.fingerprint||"")+"）"):"未登记"}</h4>
+  <p class="note">没登记公钥，别人就没法给你分享加密凭证。私钥只存在这台浏览器里，换浏览器要重新生成并重新登记。</p>
+  <div style="display:flex;gap:8px;flex-wrap:wrap"><button id="res-genkey">在本机生成密钥对</button><button id="res-regkey">登记我的公钥</button></div>
+  <textarea id="res-pubkey" rows="3" placeholder="公钥（base64 SPKI，生成后自动填入）" style="width:100%"></textarea>
+  <h4>📦 资源（${list.length}）</h4>
+  ${list.length?list.map(r=>{const holders=(r.holders||[]).map(h=>esc(h.agent_name)).join("、")||"—";
+    const mine=(r.holders||[]).some(h=>h.agent_id===me.id);
+    const creds=resCreds.filter(c=>c.resource_id===r.id);
+    return `<div class="res-item"><b>${esc(r.name)}</b> · ${typeName[r.type]||r.type} · ${statusName[r.status]||r.status} · ${r.sharing==="shared"?("共享 "+((r.holders||[]).length)+"/"+r.capacity+" 席"):"独占"}
+    <div class="res-meta">${esc(r.purpose||"")}${r.quota?(" · 额度/到期："+esc(r.quota)):""}${r.expires_at?(" · "+esc(r.expires_at)):""}<br>借用人：${holders}${r.note?(" · "+esc(r.note)):""}</div>
+    <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:6px">
+      <button data-res-claim="${r.id}" ${r.status==="borrowed"&&r.sharing==="exclusive"&&!mine?"disabled":""}>借用</button>
+      <button data-res-release="${r.id}" ${mine?"":"disabled"}>归还</button>
+      ${canManage?`<button data-res-del="${r.id}">删除</button>`:""}
+    </div>
+    <div class="res-meta">加密凭证 ${creds.length} 份（只显示元数据）${creds.map(c=>`<br>· ${esc(c.owner_name)} → ${esc(c.recipient_name)} · ${esc(c.algorithm)} · 指纹 ${esc(c.fingerprint||"")} ${c.expires_at?("· 到期 "+esc(c.expires_at)):""}`).join("")}</div>
+    <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:6px">
+      <select data-res-recipient="${r.id}" style="flex:1;min-width:140px"><option value="">存加密凭证给…</option>${resPubkeys.map(p=>`<option value="${p.agent_id}">${esc(p.agent_name)}</option>`).join("")}</select>
+      <button data-res-deposit="${r.id}">加密存入</button>
+      <button data-res-decrypt="${r.id}">取回并解密</button>
+    </div>
+    <textarea data-res-plain="${r.id}" rows="2" placeholder="要分享的凭证明文（只在本机加密，不会明文发送）" style="width:100%"></textarea>
+    <div data-res-decrypted="${r.id}" class="res-meta"></div>
+    </div>`;}).join(""):"<p class='note'>还没有登记资源，Atlas 或房主可以在下面登记。</p>"}
+  ${canManage?`<h4>＋ 登记新资源（仅房主 / Atlas）</h4>
+  <input id="res-new-name" placeholder="名字，如 hw / Hark Pro 账号">
+  <input id="res-new-purpose" placeholder="用途">
+  <select id="res-new-type"><option value="server">服务器</option><option value="browser">浏览器</option><option value="account">账号</option><option value="proxy">代理</option><option value="domain">域名</option><option value="storage">存储</option><option value="other">其他</option></select>
+  <select id="res-new-sharing"><option value="exclusive">独占（同时一人）</option><option value="shared">共享（按席位）</option></select>
+  <input id="res-new-quota" placeholder="额度/到期，如 每月 12-09 重置（可空）">
+  <button id="res-create" style="margin-top:8px">登记资源</button>`:"<p class='note'>登记新资源请找房主或 Atlas。</p>"}
+  <p class="note" id="resmsg"></p>`;
+  const msg=t=>{const e=$("#resmsg");if(e)e.textContent=t;};
+  body.querySelector("#res-genkey").onclick=async()=>{
+    try{
+      const kp=await crypto.subtle.generateKey({name:"RSA-OAEP",modulusLength:2048,publicExponent:new Uint8Array([1,0,1]),hash:"SHA-256"},true,["encrypt","decrypt"]);
+      const pub=await crypto.subtle.exportKey("spki",kp.publicKey);
+      const priv=await crypto.subtle.exportKey("pkcs8",kp.privateKey);
+      try{localStorage.setItem("muse_chatroom_privkey_"+me.id,resB64(priv));}catch{}
+      $("#res-pubkey").value=resB64(pub);
+      msg("密钥对已在本机生成，私钥只存在这台浏览器里。点“登记我的公钥”完成登记。");
+    }catch(e){msg("生成失败："+(e&&e.message||e));}
+  };
+  body.querySelector("#res-regkey").onclick=async()=>{
+    const pub=$("#res-pubkey").value.trim();if(!pub){msg("先生成密钥对，或粘贴公钥。");return;}
+    const r=await fetch(api+"/api/agents/"+encodeURIComponent(me.id)+"/pubkey",{method:"POST",headers:authHeaders(),body:JSON.stringify({public_key:pub,algorithm:"RSA-OAEP"})});
+    const d=await r.json();if(d.error){msg(d.error);return;}
+    msg("公钥已登记，指纹 "+(d.fingerprint||"")+"。");loadResourcesBoard();
+  };
+  body.querySelectorAll("[data-res-claim]").forEach(b=>b.onclick=async()=>{
+    const r=await fetch(api+"/api/resources/"+encodeURIComponent(b.dataset.resClaim)+"/claim",{method:"POST",headers:authHeaders(),body:JSON.stringify({})});
+    const d=await r.json();if(d.error){msg(d.error);return;}msg("已借用。");loadResourcesBoard();
+  });
+  body.querySelectorAll("[data-res-release]").forEach(b=>b.onclick=async()=>{
+    const r=await fetch(api+"/api/resources/"+encodeURIComponent(b.dataset.resRelease)+"/release",{method:"POST",headers:authHeaders(),body:JSON.stringify({})});
+    const d=await r.json();if(d.error){msg(d.error);return;}msg("已归还。");loadResourcesBoard();
+  });
+  body.querySelectorAll("[data-res-del]").forEach(b=>b.onclick=async()=>{
+    if(!confirm("确定删除这条资源？正在借用中的资源删不掉。"))return;
+    const r=await fetch(api+"/api/resources/"+encodeURIComponent(b.dataset.resDel),{method:"DELETE",headers:authHeaders()});
+    const d=await r.json();if(d.error){msg(d.error);return;}msg("已删除。");loadResourcesBoard();
+  });
+  body.querySelectorAll("[data-res-deposit]").forEach(b=>b.onclick=async()=>{
+    const rid=b.dataset.resDeposit;
+    const sel=body.querySelector(`[data-res-recipient="${rid}"]`);
+    const plainEl=body.querySelector(`[data-res-plain="${rid}"]`);
+    const recipient=sel?sel.value:"";const plain=plainEl?plainEl.value:"";
+    if(!recipient){msg("先选借用人（对方须已登记公钥）。");return;}
+    if(!plain){msg("先填要分享的凭证明文（只在本机加密）。");return;}
+    const pk=resPubkeys.find(p=>p.agent_id===recipient);
+    if(!pk){msg("对方还没登记公钥。");return;}
+    try{
+      const pubKey=await crypto.subtle.importKey("spki",resUnB64(pk.public_key),{name:"RSA-OAEP",hash:"SHA-256"},false,["encrypt"]);
+      const aesKey=await crypto.subtle.generateKey({name:"AES-GCM",length:256},true,["encrypt","decrypt"]);
+      const iv=crypto.getRandomValues(new Uint8Array(12));
+      const ct=await crypto.subtle.encrypt({name:"AES-GCM",iv},aesKey,new TextEncoder().encode(plain));
+      const rawAes=await crypto.subtle.exportKey("raw",aesKey);
+      const wrapped=await crypto.subtle.encrypt({name:"RSA-OAEP"},pubKey,rawAes);
+      const r=await fetch(api+"/api/credentials",{method:"POST",headers:authHeaders(),body:JSON.stringify({resource_id:rid,recipient_id:recipient,ciphertext:resB64(ct),wrapped_key:resB64(wrapped),iv:resB64(iv),algorithm:"RSA-OAEP+AES-GCM"})});
+      const d=await r.json();if(d.error){msg(d.error);return;}
+      if(plainEl)plainEl.value="";msg("已加密存入密文，指纹 "+(d.fingerprint||"")+"。明文没有发送。");loadResourcesBoard();
+    }catch(e){msg("加密/存入失败："+(e&&e.message||e));}
+  });
+  body.querySelectorAll("[data-res-decrypt]").forEach(b=>b.onclick=async()=>{
+    const rid=b.dataset.resDecrypt;const out=body.querySelector(`[data-res-decrypted="${rid}"]`);
+    const priv=resPrivKey();if(!priv){if(out)out.textContent="这台浏览器里没有你的私钥（换浏览器要重新生成并重新登记公钥）。";return;}
+    const mine=resCreds.filter(c=>c.resource_id===rid&&(c.recipient_id===me.id||c.owner_id===me.id));
+    if(!mine.length){if(out)out.textContent="没有发给你的加密凭证。";return;}
+    try{
+      const c=mine[mine.length-1];
+      const r=await fetch(api+"/api/credentials/"+encodeURIComponent(c.id),{headers:authHeaders()});
+      const d=await r.json();if(d.error||!d.ciphertext){if(out)out.textContent=d.error||"取回密文失败（只有属主和借用人能取）。";return;}
+      const privKey=await crypto.subtle.importKey("pkcs8",resUnB64(priv),{name:"RSA-OAEP",hash:"SHA-256"},false,["decrypt"]);
+      const rawAes=await crypto.subtle.decrypt({name:"RSA-OAEP"},privKey,resUnB64(d.wrapped_key));
+      const aesKey=await crypto.subtle.importKey("raw",rawAes,{name:"AES-GCM"},false,["decrypt"]);
+      const pt=await crypto.subtle.decrypt({name:"AES-GCM",iv:new Uint8Array(resUnB64(d.iv))},aesKey,resUnB64(d.ciphertext));
+      const text=new TextDecoder().decode(pt);
+      if(out)out.innerHTML="解密结果（只显示在你这台浏览器，别贴到房里）：<br><textarea readonly rows='2' style='width:100%'>"+esc(text)+"</textarea>";
+    }catch(e){if(out)out.textContent="解密失败（私钥不对或密文已轮换）："+(e&&e.message||e);}
+  });
+  const createBtn=$("#res-create");
+  if(createBtn)createBtn.onclick=async()=>{
+    const name=$("#res-new-name").value.trim();if(!name){msg("先填资源名字。");return;}
+    const r=await fetch(api+"/api/resources",{method:"POST",headers:authHeaders(),body:JSON.stringify({name,purpose:$("#res-new-purpose").value,type:$("#res-new-type").value,sharing:$("#res-new-sharing").value,quota:$("#res-new-quota").value})});
+    const d=await r.json();if(d.error){msg(d.error);return;}msg("资源已登记。");loadResourcesBoard();
+  };
+}
+$("#resentry").onclick=()=>openResourcesModal();
+$("#resclose").onclick=()=>closeResourcesModal();
+$("#resbackdrop").onclick=()=>closeResourcesModal();
+
 async function loadAdmin(){
   if(!me||(me.role!=="owner"&&me.role!=="moderator"))return;
   try{
@@ -1157,6 +1551,7 @@ async function loadAdmin(){
     ]);
     const pend=(ap.approvals||[]).filter(a=>a.status==="pending");
     $("#approvals").innerHTML=pend.length?pend.map(a=>`<div class="rowline"><span>${esc(a.requester_name)} 申请${{mute:"禁言",kick:"踢出",delete:"删消息","revoke-key":"吊销 key"}[a.action]||esc(a.action)} <b>${esc(a.target_name||"")}</b><br><span class="note">${esc(a.reason||"")}</span></span><span>${me.role==="owner"?`<button data-ap="${esc(a.id)}">批准</button> <button data-rj="${esc(a.id)}">驳回</button>`:"<span class='note'>等房主批准</span>"}</span></div>`).join(""):"没有待审批。";
+
     document.querySelectorAll("#approvals [data-ap]").forEach(b=>b.onclick=async()=>{
       const r=await fetch(api+"/api/admin/approve",{method:"POST",headers:authHeaders(),body:JSON.stringify({approval_id:b.dataset.ap})});
       const d=await r.json();if(d.error)alert(d.error);loadAdmin();
@@ -1180,6 +1575,7 @@ async function loadAdmin(){
         acts.push(`<button data-req="revoke-key" data-tid="${esc(x.id)}" data-nm="${esc(x.name)}">申请吊销</button>`);
       }
       return `<div class="rowline"><span>${TYPE_EMOJI[x.type]||"👤"} ${esc(x.name)} ${badge(x.type)}${platBadge(x.platform)} ${muted?"<b style='color:#ffb74d'>禁言中</b>":""}</span><span>${acts.join(" ")}</span></div>`;
+
     }).join("")||"没有其他成员。";
     document.querySelectorAll("#adminmembers [data-mute]").forEach(b=>b.onclick=async()=>{
       if(!confirm(`禁言 ${b.dataset.nm} 10 分钟？`))return;
@@ -1206,12 +1602,14 @@ async function loadAdmin(){
       $("#inboxwrap").style.display="block";
       const ib=await fetch(api+"/api/admin/key-inbox",{headers:authHeaders()}).then(r=>r.json());
       $("#inboxlist").innerHTML=(ib.inbox||[]).filter(k=>!k.revoked).length?(ib.inbox||[]).filter(k=>!k.revoked).map(k=>`<div class="rowline"><span><code>${esc(k.token)}</code><br><span class="note">${esc(k.purpose||"")} · ${esc(k.created_by)} · ${new Date(k.created).toLocaleString("zh-CN")}</span></span><button data-dist="${esc(k.id)}">已分发</button></div>`).join(""):"私信箱是空的。";
+
       document.querySelectorAll("#inboxlist [data-dist]").forEach(b=>b.onclick=async()=>{
         await fetch(api+"/api/admin/distribute-key",{method:"POST",headers:authHeaders(),body:JSON.stringify({id:b.dataset.dist})});
         loadAdmin();
       });
       const wb=await fetch(api+"/api/bridge/wechat-bindings",{headers:authHeaders()}).then(r=>r.json());
       $("#wechatbindlist").innerHTML=(wb.bindings||[]).filter(b=>!b.revoked).length?(wb.bindings||[]).filter(b=>!b.revoked).map(b=>`<div class="rowline"><span><b>${esc(b.identity_name||"?")}</b> ← 微信 <code>${esc((b.wechat_name||b.wechat_id||"").slice(0,24))}</code><br><span class="note">绑定于 ${new Date(b.bound_at).toLocaleString("zh-CN")}</span></span><span><button data-rebind="${esc(b.identity_id||"")}">重新生成绑定码</button> <button data-unbind="${esc(b.wechat_id||"")}">解绑</button></span></div>`).join(""):"还没有微信绑定。";
+
       document.querySelectorAll("#wechatbindlist [data-unbind]").forEach(b=>b.onclick=async()=>{
         if(!confirm("解绑后该微信用户退回“微信访客”身份，key 本身不吊销。确定？"))return;
         await fetch(api+"/api/bridge/wechat-binding/"+encodeURIComponent(b.dataset.unbind),{method:"DELETE",headers:authHeaders()});
@@ -1304,6 +1702,7 @@ async function joinWithToken(token){
     $("#admin").style.display="none";
     updateWhoami();connect();
     alert("加入失败："+d.error);
+
     return false;
   }
   me={...d,token};
@@ -1312,7 +1711,8 @@ async function joinWithToken(token){
   if(me.role==="owner"||me.role==="moderator"){$("#admin").style.display="block";loadAdmin();}
   if(me.role==="owner")$("#roomcreate").style.display="block";
   if(me.role!=="owner"){$("#mybridge").style.display="block";loadMyBridge();}
-  updateWhoami();updateApiCode();connect();loadAgents();loadWorkbenchBoard();checkFileStatus();
+  updateWhoami();updateApiCode();connect();loadAgents();loadWorkbenchBoard();loadApprovalBoard();loadResourcesBoard();checkFileStatus();
+
   return true;
 }
 $("#join").onclick=async()=>{
@@ -1327,6 +1727,7 @@ $("#createkey").onclick=async()=>{
   if(d.error){alert(d.error);return;}
   const box=$("#tokenbox");box.style.display="block";
   box.innerHTML=`<b>新 key（只显示这一次，复制好）：</b><br>${esc(d.token)}<br><span class="note">身份：${esc(d.name)}（${esc(d.id)} · ${esc(d.type)}）— 重名会自动加 #2、#3 后缀，发 key 时按这个真实名字传。</span><br><span class="note">${esc(d.note||"")}</span><br><button id="copytok" style="margin-top:8px">复制 key</button>`;
+
   $("#copytok").onclick=()=>navigator.clipboard.writeText(d.token).then(()=>alert("已复制"));
   if($("#keyplatform").value==="wechat")showWechatBindCard(d.token,null);
   loadAdmin();
@@ -1353,6 +1754,7 @@ async function loadBridges(){
   const r=await fetch(api+"/api/admin/container-bridges",{headers:authHeaders()}).then(r=>r.json()).catch(()=>({error:"容器桥连不上"}));
   if(r.error){list.innerHTML=`<span class="note">微信桥管理不可用：${esc(r.error)}</span>`;$("#bridgecount").textContent="";return;}
   const bs=(r.bridges||[]).filter(b=>!b.revoked);
+
   $("#bridgecount").textContent=`${bs.length}/10`;
   list.innerHTML=bs.length?bs.map(b=>{
     const st=b.status||"", bs2=b.bind_status||"";
@@ -1504,6 +1906,7 @@ curl ${api}/api/identities/me \\
   -H "Authorization: Bearer ${tok}"
 
 # 发消息（curl）
+
 curl -X POST ${api}/api/rooms/${room}/messages \\
   -H "Authorization: Bearer ${tok}" \\
   -d '{"text":"你好，我是 Atlas"}'
@@ -1538,12 +1941,17 @@ curl -X POST ${api}/api/evaluate \\
   $("#wbmin").onclick=minimizeWorkbenchFloat;
   $("#wbreset").onclick=()=>{if(wb3d&&wb3d.resetView)wb3d.resetView();};
   $("#wbscenetoggle").onclick=wbToggleScene;
+
   $("#wbzoomin").onclick=()=>{if(wb3d&&wb3d.orbit){wb3d.orbit.radius=Math.max(7,wb3d.orbit.radius-1.5);wb3d.orbit.auto=false;wb3d.applyCamera();}};
   $("#wbzoomout").onclick=()=>{if(wb3d&&wb3d.orbit){wb3d.orbit.radius=Math.min(20,wb3d.orbit.radius+1.5);wb3d.orbit.auto=false;wb3d.applyCamera();}};
   initWorkbenchFloatDrag();
   if(isMobile()){setMobileTab("chat");}else{openWorkbenchFloat();}
-  document.addEventListener("keydown",e=>{if(e.key==="Escape"){if(isMobile()&&mobileTab==="workbench"){setMobileTab("chat");}else{closeWorkbenchFloat();}}});
-  setInterval(()=>{loadWorkbenchBoard();},300000);
+  $("#abentry").onclick=()=>{if(isMobile()){setMobileTab(mobileTab==="approval"?"chat":"approval");}else{openApprovalModal();}};
+  $("#abclose").onclick=()=>{if(isMobile()&&mobileTab==="approval"){setMobileTab("chat");}else{closeApprovalModal();}};
+  $("#abbackdrop").onclick=closeApprovalModal;
+  document.addEventListener("keydown",e=>{if(e.key==="Escape"){if(isMobile()&&(mobileTab==="workbench"||mobileTab==="approval")){setMobileTab("chat");}else{closeWorkbenchFloat();closeApprovalModal();}}});
+  setInterval(()=>{loadWorkbenchBoard();loadApprovalBoard();loadResourcesBoard();},60000);
+
 })();
 // 手机：抽屉与成员开关
 $("#menubtn").onclick=()=>document.body.classList.add("panel-open");

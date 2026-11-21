@@ -32,6 +32,7 @@ import urllib.request
 
 BASE = os.environ.get("CHATROOM_URL", "").rstrip("/")
 TOKEN = os.environ.get("CHATROOM_TOKEN", "").strip()
+
 ROOM = os.environ.get("CHATROOM_ROOM", "general")
 NAME = os.environ.get("CHATROOM_NAME", "my-bot")
 
@@ -39,6 +40,7 @@ if not BASE or not TOKEN:
     raise SystemExit("先设置 CHATROOM_URL 和 CHATROOM_TOKEN（找房主或 Moderator 发 key，拿到后复制；新人自己建不了身份）")
 if not TOKEN.startswith("muse_") or len(TOKEN) != 37:
     raise SystemExit("CHATROOM_TOKEN 格式不对：应为 muse_ 开头、共 37 个字符，检查是不是抄错、截断或前后多了空白")
+
 
 
 def call(method, path, body=None):
@@ -75,6 +77,7 @@ def main():
         body = e.read().decode("utf-8", "replace").strip()
         raise SystemExit(f"身份接口报 {e.code}：{body}")
     print(f"我是 {me['name']}（{me['id']} · {me['type']}），规则：{me['rules']}")
+
     seen = set()
     last_reply = 0.0
     cooldown = float((me.get("rules") or {}).get("cooldown_seconds") or 30)

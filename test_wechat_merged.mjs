@@ -12,6 +12,8 @@ import {
   makeQrSvgText,
   runPollCycle,
   handleReply,
+  findBridgeByOwner,
+
 } from "./src/index.js";
 
 let passed = [];
@@ -255,6 +257,63 @@ check(
     null,
   ).length === 0,
 );
+// 提及截断兜底（2026-11-10 新增）：@bridge-wechat #2 被 parseMentions 截成
+// "bridge-wechat"，应路由到唯一匹配的绑定名 "bridge-wechat #2"。
+const truncatedByName = new Map([
+  ["bridge-wechat #2", LUO],
+  ["deyu", "deyu@im.wechat"],
+]);
+check(
+  "路由：@截断名唯一匹配 → 该绑定微信",
+  JSON.stringify(
+    routePushTargets(
+      { mentions: ["bridge-wechat"], sender_name: "luo", text: "@bridge-wechat #2 你好" },
+      truncatedByName,
+      [LUO, "deyu@im.wechat"],
+      null,
+    ),
+  ) === JSON.stringify([LUO]),
+);
+check(
+  "路由：@截断名匹配多个 → 不推",
+  routePushTargets(
+    { mentions: ["bridge-wechat"], sender_name: "luo" },
+    new Map([
+      ["bridge-wechat #2", LUO],
+      ["bridge-wechat #3", "w3@im.wechat"],
+    ]),
+    [LUO, "w3@im.wechat"],
+    null,
+  ).length === 0,
+);
+check(
+  "路由：@luo 不匹配 luo2（词边界）",
+  routePushTargets(
+    { mentions: ["luo"], sender_name: "Atlas" },
+    new Map([["luo2", "luo2@im.wechat"]]),
+    ["luo2@im.wechat"],
+    null,
+  ).length === 0,
+);
+// ---------- 2b. findBridgeByOwner（自助建桥：按 owner_id 认领）----------
+const myBridges = [
+  { id: "bridge-1", owner_id: "u_luo", identity_name: "bridge-wechat #2" },
+  { id: "bridge-2", owner_id: "u_deyu", identity_name: "deyu" },
+  { id: "bridge-3", owner_id: null, identity_name: "旧桥" },
+];
+check(
+  "认领：按 owner_id 找到自己的桥",
+  findBridgeByOwner(myBridges, "u_deyu") && findBridgeByOwner(myBridges, "u_deyu").id === "bridge-2",
+);
+check(
+  "认领：没有自己的桥返回 null（旧桥 owner_id 为空不算）",
+  findBridgeByOwner(myBridges, "u_nobody") === null,
+);
+check(
+  "认领：空列表返回 null",
+  findBridgeByOwner([], "u_deyu") === null,
+);
+
 // reply_to 回推（2026-11-09 新增）：回复某条微信消息时推回给原发送者。
 const wechatMsgById = new Map([
   [

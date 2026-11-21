@@ -155,6 +155,7 @@ export class ChatRoom {
     // 回复须与服务端原先回的 JSON.stringify({type:"pong"}) 逐字节一致。
     // 旧环境不支持时静默回落到 webSocketMessage 里的手动 ping→pong。
     try { this.ctx.setWebSocketAutoResponse(new WebSocketRequestResponsePair('{"type":"ping"}', '{"type":"pong"}')); } catch {}
+
     this.ctx.blockConcurrencyWhile(async () => {
       const sql = this.ctx.storage.sql;
       sql.exec(`CREATE TABLE IF NOT EXISTS identities(
@@ -819,6 +820,11 @@ export class ChatRoom {
         id: newId("t_"), title, detail,
         agent_id: sender.id, agent_name: sender.name,
         status: "in_progress", progress: [], created_at: now, updated_at: now,
+        // WS 自报路径：登记人即执行者（与 REST 自报一致，旧行为不变）。
+        ticket_no: null, dispatcher: sender.name, dispatcher_id: sender.id,
+        assignee_id: sender.id, assignee_name: sender.name,
+        due_at: null, urgency: "async", result: null, evidence: [], acceptance: null,
+
       };
       tasks.push(task);
       await this.saveTasksWs(tasks);
@@ -827,7 +833,9 @@ export class ChatRoom {
     if (data.type === "task_progress") {
       const task = tasks.find((t) => t.id === String(data.task_id || ""));
       if (!task) return { type: "error", error: "任务不存在" };
-      if (task.agent_id !== sender.id) return { type: "error", error: "只能更新自己的任务" };
+      if (taskAssignee(task).id !== sender.id) return { type: "error", error: "只能更新自己的任务" };
+      if (normalizeTaskStatus(task.status) !== "in_progress") return { type: "error", error: "只有执行中的任务能更新进度" };
+
       const note = String(data.note || "").trim().slice(0, 500);
       if (!note) return { type: "error", error: "note 不能为空" };
       task.progress = task.progress || [];
@@ -839,7 +847,10 @@ export class ChatRoom {
     if (data.type === "task_done") {
       const task = tasks.find((t) => t.id === String(data.task_id || ""));
       if (!task) return { type: "error", error: "任务不存在" };
-      if (task.agent_id !== sender.id) return { type: "error", error: "只能更新自己的任务" };
+      if (taskAssignee(task).id !== sender.id) return { type: "error", error: "只能更新自己的任务" };
+      if (normalizeTaskStatus(task.status) === "pending_acceptance") return { type: "error", error: "已提交结果，待验收，不能直接标完成" };
+      if (normalizeTaskStatus(task.status) === "queued") return { type: "error", error: "还没认领，先认领再做" };
+
       task.status = "done";
       task.updated_at = Date.now();
       await this.saveTasksWs(tasks);
@@ -941,6 +952,7 @@ async function wsFailErr(env, url) {
   if (reason === "revoked") return err("这个 Token 已被吊销，找房主重新要一个", 401);
   return err("Token 无效：?token= 里的串不对或不存在，检查是不是抄错、截断，或 key 还没建", 401);
 }
+
 function needRole(ident, roles) {
   if (!ident) return err("需要 Bearer token", 401);
   if (!roles.includes(ident.role)) return err("权限不足，需要 " + roles.join("/"), 403);
@@ -991,18 +1003,58 @@ const NEURON_PER_REPLY = 15;
 
 // ---------- 任务自报 ----------
 // 任务存在注册表 DO 的 meta 里（key=tasks，JSON 数组），保持简单。
-// 任务：{id, title, detail, agent_id, agent_name, status(in_progress|done),
-//        progress:[{note, ts}], created_at, updated_at}。
+// 任务：{id, title, detail, agent_id, agent_name, status(queued|in_progress|
+//        pending_acceptance|done), progress:[{note, ts}], created_at, updated_at,
+//        ticket_no?, dispatcher?, dispatcher_id?, assignee_id?, assignee_name?,
+//        due_at?, urgency?, result?, evidence?, acceptance?}。
+// 工单制补丁（已部署 2026-11-21）：登记人 agent_id/agent_name 是建单人，
+// 执行者是 assignee_id/assignee_name，两者分开——派单时登记人是 Atlas（或
+// luo），执行者是被指派的 agent；自报旧任务没有 assignee 字段时，执行者
+// 默认就是登记人，旧行为不变。status 只有上面四种；register 默认仍为
+// in_progress，只有调用方明确要求排队（status/queue）且指定了执行者时
+// 才建 queued。/done 是旧的直接完成路径（自报兼容保留）；派单工单应走
+// submit（交结果 → pending_acceptance）+ accept（验收 → done），
+// pending_acceptance 状态下 /done 会被拒绝，避免绕过验收。
 // 监督员：每小时最多跑一次；对 in_progress、超 6 小时没进度、建好超 1 小时
-// 的任务（Atlas 除外，自己跟踪自己）在 #general 以 Moderator 身份追问，
-// 每个任务每 6 小时最多追问一次。
+// 的任务（执行者是 Atlas 的除外）在 #general 以 Moderator 身份追问，
+// 每个任务每 6 小时最多追问一次；pending_acceptance 超 6 小时没人验收、
+// queued 超 24 小时没人领只写进报告标出来，不自动 @。
+
 const TASKS_META_KEY = "tasks";
 const TASK_SUPERVISOR_LAST_KEY = "task_supervisor_last";
 const SUPERVISOR_INTERVAL_MS = 60 * 60 * 1000;
 const SUPERVISOR_STALE_MS = 6 * 60 * 60 * 1000;
 const SUPERVISOR_MIN_AGE_MS = 60 * 60 * 1000;
 const SUPERVISOR_NUDGE_COOLDOWN_MS = 6 * 60 * 60 * 1000;
+const SUPERVISOR_UNCLAIMED_MS = 24 * 60 * 60 * 1000;
 const ATLAS_ID = "u_902a91ad";
+// 工单状态（向后兼容：旧任务只有 in_progress/done，缺字段时按默认值读）。
+const TASK_STATUSES = ["queued", "in_progress", "pending_acceptance", "done"];
+function normalizeTaskStatus(s) {
+  return TASK_STATUSES.includes(s) ? s : "in_progress";
+}
+// 执行者：有 assignee_id 就用它，否则回落到登记人（旧任务）。
+function taskAssignee(t) {
+  return { id: t.assignee_id || t.agent_id || "", name: t.assignee_name || t.agent_name || "" };
+}
+function sanitizeTicketNo(v) {
+  const s = String(v || "").trim().slice(0, 32);
+  return /^[A-Za-z0-9_-]+$/.test(s) ? s : null;
+}
+function sanitizeEvidence(v) {
+  if (!Array.isArray(v)) return [];
+  return v.filter((x) => typeof x === "string" && x.trim()).slice(0, 20).map((x) => x.trim().slice(0, 500));
+}
+function sanitizeChecked(v) {
+  if (Array.isArray(v)) return v.filter((x) => typeof x === "string" && x.trim()).slice(0, 20).map((x) => x.trim().slice(0, 200));
+  if (typeof v === "string" && v.trim()) return [v.trim().slice(0, 200)];
+  return [];
+}
+function parseDueAt(v) {
+  const n = Math.floor(Number(v));
+  return Number.isFinite(n) && n > 0 ? n : null;
+}
+
 
 async function loadTasks(env) {
   const { data } = await regCall(env, "/registry/meta?key=" + TASKS_META_KEY);
@@ -1014,22 +1066,144 @@ async function loadTasks(env) {
 async function saveTasks(env, tasks) {
   await regCall(env, "/registry/meta", { key: TASKS_META_KEY, value: JSON.stringify(tasks) });
 }
+
+// ---------- 共享资源平台 ----------
+// 资源登记册、公钥册、凭证密文库都存在注册表 DO meta 里，和 tasks /
+// workbench_board 同一模式，不另起数据库。登记册里只有元数据：
+// 凭证的明文永远不上服务器——客户端在浏览器里用借用人的公钥做
+// RSA-OAEP + AES-GCM 混合加密，只把密文（ciphertext / wrapped_key / iv）
+// 发上来；服务器端绝不接收、绝不存储、绝不回显任何明文、密码、Token。
+// 密文绝不发进聊天室消息历史（房里消息删不掉），只走 /api/credentials。
+const RESOURCES_META_KEY = "resources";
+const PUBKEYS_META_KEY = "agent_pubkeys";
+const CREDENTIALS_META_KEY = "credentials";
+const RESOURCE_TYPES = ["server", "browser", "account", "proxy", "domain", "storage", "other"];
+const RESOURCE_STATUSES = ["available", "borrowed", "offline", "unverified"];
+async function loadResources(env) {
+  const { data } = await regCall(env, "/registry/meta?key=" + RESOURCES_META_KEY);
+  try { const arr = JSON.parse(data.value || "[]"); return Array.isArray(arr) ? arr : []; } catch { return []; }
+}
+async function saveResources(env, resources) {
+  await regCall(env, "/registry/meta", { key: RESOURCES_META_KEY, value: JSON.stringify(resources) });
+}
+async function loadPubkeys(env) {
+  const { data } = await regCall(env, "/registry/meta?key=" + PUBKEYS_META_KEY);
+  try { const obj = JSON.parse(data.value || "{}"); return obj && typeof obj === "object" ? obj : {}; } catch { return {}; }
+}
+async function savePubkeys(env, pubkeys) {
+  await regCall(env, "/registry/meta", { key: PUBKEYS_META_KEY, value: JSON.stringify(pubkeys) });
+}
+async function loadCredentials(env) {
+  const { data } = await regCall(env, "/registry/meta?key=" + CREDENTIALS_META_KEY);
+  try { const arr = JSON.parse(data.value || "[]"); return Array.isArray(arr) ? arr : []; } catch { return []; }
+}
+async function saveCredentials(env, creds) {
+  await regCall(env, "/registry/meta", { key: CREDENTIALS_META_KEY, value: JSON.stringify(creds) });
+}
+// 资源登记/借用管理：房主，或 Atlas（主 Muse，总调度）。
+// id 和名字双认：只认写死的生产 id 太脆，身份重建就认不出来；
+// 任务验收那边（canAcceptTask）也是 id / 名字双认，这里保持一致。
+function canManageResource(ident) {
+  return !!ident && (ident.role === "owner" || ident.id === ATLAS_ID ||
+    String(ident.name || "").startsWith("Atlas"));
+}
+function publicResource(r) {
+  return {
+    id: r.id, name: r.name, type: r.type, purpose: r.purpose || "",
+    status: RESOURCE_STATUSES.includes(r.status) ? r.status : "unverified",
+    sharing: r.sharing === "shared" ? "shared" : "exclusive",
+    capacity: Math.max(1, Math.min(20, Math.floor(+r.capacity || 1))),
+    shareable: r.shareable !== false,
+    quota: r.quota || null, reset_at: r.reset_at || null, expires_at: r.expires_at || null,
+    note: r.note || "", holders: Array.isArray(r.holders) ? r.holders : [],
+    holder_id: (Array.isArray(r.holders) && r.holders[0]) ? r.holders[0].agent_id : null,
+    holder_name: (Array.isArray(r.holders) && r.holders[0]) ? r.holders[0].agent_name : null,
+    created_by: r.created_by || null, created_at: r.created_at, updated_at: r.updated_at,
+  };
+}
+function publicPubkey(agentId, entry) {
+  return {
+    agent_id: agentId, agent_name: entry.agent_name || "",
+    algorithm: entry.algorithm || "RSA-OAEP",
+    public_key: entry.public_key || "",
+    fingerprint: entry.fingerprint || null, updated_at: entry.updated_at || null,
+  };
+}
+// 凭证公开视图：默认只含元数据，不含密文。canSee（属主 / 被授权的借用人）
+// 时才含密文字段；其余人调用 GET 单条也只能看到元数据。
+function publicCredential(c, canSee) {
+  const base = {
+    id: c.id, resource_id: c.resource_id, resource_name: c.resource_name || "",
+    owner_id: c.owner_id, owner_name: c.owner_name || "",
+    recipient_id: c.recipient_id, recipient_name: c.recipient_name || "",
+    algorithm: c.algorithm || "RSA-OAEP+AES-GCM",
+    fingerprint: c.fingerprint || null,
+    expires_at: c.expires_at || null, created_at: c.created_at,
+    has_ciphertext: true,
+  };
+  if (!canSee) return base;
+  return { ...base, ciphertext: c.ciphertext, wrapped_key: c.wrapped_key, iv: c.iv };
+}
+function canSeeCredential(ident, c) {
+  if (!ident) return false;
+  if (ident.role === "owner") return true;
+  return c.owner_id === ident.id || c.recipient_id === ident.id;
+}
 function publicTask(t) {
+  const assignee = taskAssignee(t);
   return {
     id: t.id, title: t.title, detail: t.detail || "",
-    agent: t.agent_name, agent_id: t.agent_id, status: t.status,
+    agent: t.agent_name, agent_id: t.agent_id, status: normalizeTaskStatus(t.status),
     progress: t.progress || [], created_at: t.created_at, updated_at: t.updated_at,
+    // 工单制新字段（全部可选；旧任务缺失时给默认值，不报错）。
+    ticket_no: t.ticket_no || null,
+    dispatcher: t.dispatcher || null, dispatcher_id: t.dispatcher_id || null,
+    assignee_id: assignee.id, assignee_name: assignee.name,
+    due_at: t.due_at || null, urgency: t.urgency === "urgent" ? "urgent" : "async",
+    result: t.result || null, evidence: Array.isArray(t.evidence) ? t.evidence : [],
+    acceptance: t.acceptance || null,
+
   };
 }
 function canEditTask(ident, task) {
   return !!ident && (ident.role === "owner" || task.agent_id === ident.id);
 }
-function createTaskRecord(ident, title, detail) {
+// 能干活的人：房主，或执行者（assignee；旧任务回落到登记人）。
+function canWorkTask(ident, task) {
+  if (!ident) return false;
+  if (ident.role === "owner") return true;
+  return taskAssignee(task).id === ident.id;
+}
+// 能验收的人：房主，或 Atlas，或派单人（按 dispatcher_id / dispatcher 名字认）。
+function canAcceptTask(ident, task) {
+  if (!ident) return false;
+  if (ident.role === "owner") return true;
+  if (ident.id === ATLAS_ID) return true;
+  if (task.dispatcher_id && task.dispatcher_id === ident.id) return true;
+  if (task.dispatcher && task.dispatcher === ident.name) return true;
+  return false;
+}
+function createTaskRecord(ident, title, detail, opts = {}) {
   const now = Date.now();
+  const assigneeId = String(opts.assignee_id || "").trim();
+  const assigneeName = String(opts.assignee_name || "").trim().slice(0, 60);
+  // 默认 in_progress；只有明确要求排队（status:"queued" 或 queue:true）
+  // 且指定了执行者时才建 queued——自报旧调用不传这些字段，行为不变。
+  const wantQueued = opts.status === "queued" || opts.queue === true;
   return {
     id: newId("t_"), title, detail: detail || "",
     agent_id: ident.id, agent_name: ident.name,
-    status: "in_progress", progress: [], created_at: now, updated_at: now,
+    status: wantQueued && assigneeId ? "queued" : "in_progress",
+    progress: [], created_at: now, updated_at: now,
+    ticket_no: sanitizeTicketNo(opts.ticket_no),
+    dispatcher: String(opts.dispatcher || ident.name).slice(0, 60),
+    dispatcher_id: ident.id,
+    assignee_id: assigneeId || ident.id,
+    assignee_name: assigneeName || ident.name,
+    due_at: parseDueAt(opts.due_at),
+    urgency: opts.urgency === "urgent" ? "urgent" : "async",
+    result: null, evidence: [], acceptance: null,
+
   };
 }
 
@@ -1047,11 +1221,28 @@ async function handleTaskSupervisor(env, report, opts) {
     }
     await regCall(env, "/registry/meta", { key: TASK_SUPERVISOR_LAST_KEY, value: String(now) });
     const tasks = await loadTasks(env);
+    // 注意：用执行者（assignee）判断是否 Atlas——派单工单的登记人是 Atlas，
+    // 按登记人排除会把所有 Atlas 派的单都漏掉（补丁前就有的隐患）。
     const stale = tasks.filter((t) =>
-      t.status === "in_progress" && t.agent_id !== ATLAS_ID &&
+      t.status === "in_progress" && taskAssignee(t).id !== ATLAS_ID &&
       (now - t.created_at) > SUPERVISOR_MIN_AGE_MS &&
       (now - t.updated_at) > SUPERVISOR_STALE_MS);
     report && report.push(`task supervisor: ${tasks.length} tasks, ${stale.length} stale`);
+    // 工单制新增：只标出来，不自动 @（避免和 Moderator 的追问重复）。
+    // ① 待验收超 6 小时没人验收；② 已派单超 24 小时没人领。
+    const pendingAcceptance = tasks.filter((t) =>
+      t.status === "pending_acceptance" && (now - t.updated_at) > SUPERVISOR_STALE_MS);
+    const unclaimed = tasks.filter((t) =>
+      t.status === "queued" && (now - t.created_at) > SUPERVISOR_UNCLAIMED_MS);
+    if (pendingAcceptance.length) {
+      report && report.push(`task supervisor: ${pendingAcceptance.length} pending_acceptance awaiting acceptance >6h: ` +
+        pendingAcceptance.map((t) => `${t.ticket_no || t.id}「${t.title}」`).join("；"));
+    }
+    if (unclaimed.length) {
+      report && report.push(`task supervisor: ${unclaimed.length} queued unclaimed >24h (疑似无人接）: ` +
+        unclaimed.map((t) => `${t.ticket_no || t.id}「${t.title}」指派给 ${taskAssignee(t).name}`).join("；"));
+    }
+
     let nudged = 0;
     for (const task of stale) {
       const nudgeKey = "task_nudged_" + task.id;
@@ -1070,7 +1261,8 @@ async function handleTaskSupervisor(env, report, opts) {
       nudged++;
       report && report.push(`task supervisor: nudged ${task.id} (${task.agent_name}：${task.title})`);
     }
-    return { skipped: false, stale: stale.length, nudged };
+    return { skipped: false, stale: stale.length, nudged, pending_acceptance_stale: pendingAcceptance.length, unclaimed_queued: unclaimed.length };
+
   } catch (e) {
     report && report.push("task supervisor error: " + (e && e.message ? e.message : String(e)));
     return { error: String((e && e.message) || e) };
@@ -2038,6 +2230,7 @@ export default {
       if (url.pathname === "/api/bridge/wechat-bindings" && request.method === "GET") {
         const me = await authIdentity(env, request);
         if (!me) return authFailErr(env, request);
+
         // 房主看管理面板；微信桥看列表做回推路由（列表里没有密钥，只有名字与微信 id）。
         if (me.role !== "owner" && me.bridge !== "wechat") return err("只有房主或微信桥能看绑定列表", 403);
         const { data } = await regCall(env, "/registry/wechat-bindings");
@@ -2188,11 +2381,13 @@ export default {
       if (url.pathname === "/api/identities/me" && request.method === "GET") {
         const ident = await authIdentity(env, request, true);
         if (!ident) return authFailErr(env, request);
+
         return json({ id: ident.id, name: ident.name, type: ident.type, platform: ident.platform, role: ident.role, rules: ident.rules });
       }
       if (url.pathname === "/api/identities/me/rules" && request.method === "PUT") {
         const ident = await authIdentity(env, request);
         if (!ident) return authFailErr(env, request);
+
         const body = await bodyJson();
         const { status, data } = await regCall(env, "/registry/set-rules", { token: ident.token, rules: body });
         return json(data, status);
@@ -2200,6 +2395,7 @@ export default {
       if (url.pathname === "/api/evaluate" && request.method === "POST") {
         const ident = await authIdentity(env, request);
         if (!ident) return authFailErr(env, request);
+
         const body = await bodyJson();
         const msg = {
           sender_id: String(body.sender_id || ""), sender_name: String(body.sender_name || ""),
@@ -2216,33 +2412,47 @@ export default {
         if (!me) return authFailErr(env, request);
         const tasks = await loadTasks(env);
         const status = url.searchParams.get("status") || "";
-        const list = status ? tasks.filter((t) => t.status === status) : tasks;
+        if (status && !TASK_STATUSES.includes(status)) return err("未知状态：" + status, 400);
+        const assignee = url.searchParams.get("assignee") || "";
+        let list = status ? tasks.filter((t) => normalizeTaskStatus(t.status) === status) : tasks;
+        if (assignee) {
+          list = list.filter((t) => {
+            const a = taskAssignee(t);
+            return a.id === assignee || a.name === assignee;
+          });
+        }
+
         return json({ tasks: list.map(publicTask) });
       }
       if (url.pathname === "/api/tasks/register" && request.method === "POST") {
         const me = await authIdentity(env, request);
         if (!me) return authFailErr(env, request);
+
         const body = await bodyJson();
         const title = String(body.title || "").trim().slice(0, 120);
         const detail = String(body.detail || "").trim().slice(0, 500);
         if (!title) return err("title 不能为空", 400);
         const tasks = await loadTasks(env);
-        const task = createTaskRecord(me, title, detail);
+        const task = createTaskRecord(me, title, detail, body);
         tasks.push(task);
         await saveTasks(env, tasks);
-        return json({ id: task.id, title: task.title, status: task.status });
+        return json(publicTask(task));
+
       }
       const taskProgressMatch = url.pathname.match(/^\/api\/tasks\/([A-Za-z0-9_-]+)\/progress$/);
       if (taskProgressMatch && request.method === "POST") {
         const me = await authIdentity(env, request);
         if (!me) return authFailErr(env, request);
+
         const body = await bodyJson();
         const note = String(body.note || "").trim().slice(0, 500);
         if (!note) return err("note 不能为空", 400);
         const tasks = await loadTasks(env);
         const task = tasks.find((t) => t.id === taskProgressMatch[1]);
         if (!task) return err("任务不存在", 404);
-        if (!canEditTask(me, task)) return err("只能更新自己的任务", 403);
+        if (!canWorkTask(me, task)) return err("只能更新自己的任务", 403);
+        if (normalizeTaskStatus(task.status) !== "in_progress") return err("只有执行中的任务能更新进度", 409);
+
         task.progress = task.progress || [];
         task.progress.push({ note, ts: Date.now() });
         task.updated_at = Date.now();
@@ -2256,16 +2466,91 @@ export default {
         const tasks = await loadTasks(env);
         const task = tasks.find((t) => t.id === taskDoneMatch[1]);
         if (!task) return err("任务不存在", 404);
-        if (!canEditTask(me, task)) return err("只能更新自己的任务", 403);
+        if (!canWorkTask(me, task)) return err("只能更新自己的任务", 403);
+        // 待验收的单不能直接 /done，否则绕过验收；请等派单人/Atlas 验收。
+        if (normalizeTaskStatus(task.status) === "pending_acceptance") return err("已提交结果，待验收，不能直接标完成", 409);
+        if (normalizeTaskStatus(task.status) === "queued") return err("还没认领，先认领再做", 409);
+
         task.status = "done";
         task.updated_at = Date.now();
         await saveTasks(env, tasks);
         return json({ ok: true, id: task.id, status: task.status });
       }
+      // ---- 工单制新接口（claim / submit / accept）----
+      // 认领：queued → in_progress。指定了执行者的单只有本人或房主能领；
+      // 没指定执行者的单，认领人即成为执行者。重复认领返回 409 并告知已认领人。
+      const taskClaimMatch = url.pathname.match(/^\/api\/tasks\/([A-Za-z0-9_-]+)\/claim$/);
+      if (taskClaimMatch && request.method === "POST") {
+        const me = await authIdentity(env, request);
+        if (!me) return err("需要 Bearer token", 401);
+        const tasks = await loadTasks(env);
+        const task = tasks.find((t) => t.id === taskClaimMatch[1]);
+        if (!task) return err("任务不存在", 404);
+        if (normalizeTaskStatus(task.status) !== "queued") {
+          const a = taskAssignee(task);
+          return err(`这单不是待领取状态（当前 ${normalizeTaskStatus(task.status)}，执行者 ${a.name || "未知"}）`, 409);
+        }
+        if (task.assignee_id && task.assignee_id !== me.id && me.role !== "owner") {
+          return err(`这单指派给 ${task.assignee_name || task.assignee_id}，不是你的单`, 403);
+        }
+        task.assignee_id = me.id;
+        task.assignee_name = me.name;
+        task.status = "in_progress";
+        task.updated_at = Date.now();
+        await saveTasks(env, tasks);
+        return json({ ok: true, id: task.id, status: task.status, assignee: me.name });
+      }
+      // 交结果：in_progress → pending_acceptance。body 可带 result / evidence。
+      const taskSubmitMatch = url.pathname.match(/^\/api\/tasks\/([A-Za-z0-9_-]+)\/submit$/);
+      if (taskSubmitMatch && request.method === "POST") {
+        const me = await authIdentity(env, request);
+        if (!me) return err("需要 Bearer token", 401);
+        const body = await bodyJson();
+        const tasks = await loadTasks(env);
+        const task = tasks.find((t) => t.id === taskSubmitMatch[1]);
+        if (!task) return err("任务不存在", 404);
+        if (!canWorkTask(me, task)) return err("只能提交自己的任务", 403);
+        if (normalizeTaskStatus(task.status) !== "in_progress") return err("只有执行中的任务能交结果", 409);
+        task.result = String(body.result || "").trim().slice(0, 2000) || null;
+        task.evidence = sanitizeEvidence(body.evidence);
+        task.status = "pending_acceptance";
+        task.progress = task.progress || [];
+        task.progress.push({ note: "已交结果，待验收", ts: Date.now() });
+        task.updated_at = Date.now();
+        await saveTasks(env, tasks);
+        return json({ ok: true, id: task.id, status: task.status });
+      }
+      // 验收：pending_acceptance → done（通过）或 → in_progress（不通过）。
+      // 只有派单人 / Atlas / 房主能验收。body：approved（默认 true）、
+      // checked（验了什么，字符串或数组）、note（原因/备注）。
+      const taskAcceptMatch = url.pathname.match(/^\/api\/tasks\/([A-Za-z0-9_-]+)\/accept$/);
+      if (taskAcceptMatch && request.method === "POST") {
+        const me = await authIdentity(env, request);
+        if (!me) return err("需要 Bearer token", 401);
+        const body = await bodyJson();
+        const tasks = await loadTasks(env);
+        const task = tasks.find((t) => t.id === taskAcceptMatch[1]);
+        if (!task) return err("任务不存在", 404);
+        if (!canAcceptTask(me, task)) return err("只有派单人、Atlas 或房主能验收", 403);
+        if (normalizeTaskStatus(task.status) !== "pending_acceptance") return err("这单还没交结果，没法验收", 409);
+        const approved = body.approved !== false;
+        const note = String(body.note || "").trim().slice(0, 500);
+        task.acceptance = {
+          by: me.name, by_id: me.id, checked: sanitizeChecked(body.checked),
+          note, at: Date.now(), outcome: approved ? "accepted" : "rejected",
+        };
+        task.status = approved ? "done" : "in_progress";
+        task.progress = task.progress || [];
+        task.progress.push({ note: approved ? "验收通过" : `验收不通过：${note || "未说明原因"}`, ts: Date.now() });
+        task.updated_at = Date.now();
+        await saveTasks(env, tasks);
+        return json({ ok: true, id: task.id, status: task.status, acceptance: task.acceptance });
+      }
       const taskDeleteMatch = url.pathname.match(/^\/api\/tasks\/([A-Za-z0-9_-]+)$/);
       if (taskDeleteMatch && request.method === "DELETE") {
         const me = await authIdentity(env, request);
         if (!me) return authFailErr(env, request);
+
         const tasks = await loadTasks(env);
         const idx = tasks.findIndex((t) => t.id === taskDeleteMatch[1]);
         if (idx < 0) return err("任务不存在", 404);
@@ -2274,6 +2559,237 @@ export default {
         await saveTasks(env, tasks);
         return json({ ok: true, id: taskDeleteMatch[1] });
       }
+      // ---- 共享资源平台（资源登记册 / 公钥册 / 凭证密文库）----
+      // 全部存在注册表 DO meta（resources / agent_pubkeys / credentials），
+      // 和 tasks / workbench_board 同一模式。登记册只含元数据；凭证只存
+      // 密文，服务器端绝不接收明文——请求里出现 plaintext / password /
+      // secret / token 等明文字段直接 400 拒绝。
+      if (url.pathname === "/api/resources" && request.method === "GET") {
+        const me = await authIdentity(env, request);
+        if (!me) return err("需要 Bearer token", 401);
+        const resources = await loadResources(env);
+        const status = url.searchParams.get("status") || "";
+        const type = url.searchParams.get("type") || "";
+        let list = resources;
+        if (status) {
+          if (!RESOURCE_STATUSES.includes(status)) return err("未知状态：" + status, 400);
+          list = list.filter((r) => r.status === status);
+        }
+        if (type) list = list.filter((r) => r.type === type);
+        return json({ resources: list.map(publicResource) });
+      }
+      if (url.pathname === "/api/resources" && request.method === "POST") {
+        const me = await authIdentity(env, request);
+        if (!me) return err("需要 Bearer token", 401);
+        if (!canManageResource(me)) return err("只有房主或 Atlas 能登记资源", 403);
+        const body = await bodyJson();
+        const name = String(body.name || "").trim().slice(0, 60);
+        if (!name) return err("name 不能为空", 400);
+        const type = RESOURCE_TYPES.includes(body.type) ? body.type : "other";
+        const sharing = body.sharing === "shared" ? "shared" : "exclusive";
+        const resources = await loadResources(env);
+        const now = Date.now();
+        const r = {
+          id: newId("r_"), name, type,
+          purpose: String(body.purpose || "").trim().slice(0, 500),
+          status: RESOURCE_STATUSES.includes(body.status) ? body.status : "available",
+          sharing, capacity: sharing === "shared" ? Math.max(1, Math.min(20, Math.floor(+body.capacity || 1))) : 1,
+          shareable: body.shareable !== false,
+          quota: String(body.quota || "").trim().slice(0, 120) || null,
+          reset_at: String(body.reset_at || "").trim().slice(0, 120) || null,
+          expires_at: String(body.expires_at || "").trim().slice(0, 120) || null,
+          note: String(body.note || "").trim().slice(0, 500),
+          holders: [], created_by: me.name, created_at: now, updated_at: now,
+        };
+        resources.push(r);
+        await saveResources(env, resources);
+        return json(publicResource(r));
+      }
+      const resourceMatch = url.pathname.match(/^\/api\/resources\/([A-Za-z0-9_-]+)$/);
+      if (resourceMatch && request.method === "GET") {
+        const me = await authIdentity(env, request);
+        if (!me) return err("需要 Bearer token", 401);
+        const resources = await loadResources(env);
+        const r = resources.find((x) => x.id === resourceMatch[1]);
+        if (!r) return err("资源不存在", 404);
+        return json(publicResource(r));
+      }
+      if (resourceMatch && request.method === "DELETE") {
+        const me = await authIdentity(env, request);
+        if (!me) return err("需要 Bearer token", 401);
+        if (!canManageResource(me)) return err("只有房主或 Atlas 能删除资源", 403);
+        const resources = await loadResources(env);
+        const idx = resources.findIndex((x) => x.id === resourceMatch[1]);
+        if (idx < 0) return err("资源不存在", 404);
+        if (Array.isArray(resources[idx].holders) && resources[idx].holders.length > 0) {
+          return err(`资源正在被 ${resources[idx].holders.map((h) => h.agent_name).join("、")} 借用，先归还再删`, 409);
+        }
+        resources.splice(idx, 1);
+        await saveResources(env, resources);
+        return json({ ok: true, id: resourceMatch[1] });
+      }
+      const resourceClaimMatch = url.pathname.match(/^\/api\/resources\/([A-Za-z0-9_-]+)\/(claim|release)$/);
+      if (resourceClaimMatch && request.method === "POST") {
+        const me = await authIdentity(env, request);
+        if (!me) return err("需要 Bearer token", 401);
+        const action = resourceClaimMatch[2];
+        const resources = await loadResources(env);
+        const r = resources.find((x) => x.id === resourceClaimMatch[1]);
+        if (!r) return err("资源不存在", 404);
+        r.holders = Array.isArray(r.holders) ? r.holders : [];
+        if (r.shareable === false) return err("这个资源不外借", 403);
+        if (action === "claim") {
+          const body = await bodyJson();
+          if (r.holders.some((h) => h.agent_id === me.id)) return err("你已经借着这个资源了", 409);
+          if (r.sharing === "exclusive" && r.holders.length > 0) {
+            return err(`独占资源，正在被 ${r.holders[0].agent_name} 借用`, 409);
+          }
+          if (r.sharing === "shared" && r.holders.length >= r.capacity) {
+            return err(`共享席位已满（${r.holders.length}/${r.capacity}）`, 409);
+          }
+          r.holders.push({
+            agent_id: me.id, agent_name: me.name,
+            purpose: String(body.purpose || "").trim().slice(0, 200),
+            claimed_at: Date.now(),
+          });
+          r.status = "borrowed";
+          r.updated_at = Date.now();
+          await saveResources(env, resources);
+          return json({ ok: true, id: r.id, status: r.status, holders: r.holders });
+        }
+        // release：借用人本人、房主或 Atlas 可归还。
+        const idx = r.holders.findIndex((h) => h.agent_id === me.id);
+        if (idx < 0 && me.role !== "owner" && me.id !== ATLAS_ID) return err("你没有借这个资源", 409);
+        if (idx >= 0) r.holders.splice(idx, 1);
+        else r.holders = [];
+        r.status = r.holders.length > 0 ? "borrowed" : "available";
+        r.updated_at = Date.now();
+        await saveResources(env, resources);
+        return json({ ok: true, id: r.id, status: r.status, holders: r.holders });
+      }
+      // ---- 公钥册：公钥是公开信息，任何人都能读；写只能写自己的（房主除外）。
+      if (url.pathname === "/api/pubkeys" && request.method === "GET") {
+        const me = await authIdentity(env, request);
+        if (!me) return err("需要 Bearer token", 401);
+        const pubkeys = await loadPubkeys(env);
+        return json({ pubkeys: Object.entries(pubkeys).map(([id, e]) => publicPubkey(id, e)) });
+      }
+      if (url.pathname === "/api/pubkeys" && request.method === "POST") {
+        const me = await authIdentity(env, request);
+        if (!me) return err("需要 Bearer token", 401);
+        const body = await bodyJson();
+        const targetId = String(body.agent_id || me.id);
+        if (targetId !== me.id && me.role !== "owner") return err("只能登记自己的公钥", 403);
+        const publicKey = String(body.public_key || "").trim();
+        if (publicKey.length < 100 || publicKey.length > 4000) return err("public_key 长度不对（应为 100–4000 字符的公钥文本）", 400);
+        if (/password|secret|private/i.test(publicKey)) return err("公钥里不应出现私钥内容", 400);
+        const algorithm = String(body.algorithm || "RSA-OAEP").trim().slice(0, 40);
+        const pubkeys = await loadPubkeys(env);
+        pubkeys[targetId] = {
+          agent_name: targetId === me.id ? me.name : String(body.agent_name || "").trim().slice(0, 60),
+          algorithm, public_key: publicKey,
+          fingerprint: await sha12(publicKey), updated_at: Date.now(),
+        };
+        await savePubkeys(env, pubkeys);
+        return json(publicPubkey(targetId, pubkeys[targetId]));
+      }
+      const agentPubkeyMatch = url.pathname.match(/^\/api\/agents\/([A-Za-z0-9_-]+)\/pubkey$/);
+      if (agentPubkeyMatch) {
+        const me = await authIdentity(env, request);
+        if (!me) return err("需要 Bearer token", 401);
+        const targetId = agentPubkeyMatch[1];
+        const pubkeys = await loadPubkeys(env);
+        if (request.method === "GET") {
+          if (!pubkeys[targetId]) return err("该成员还没登记公钥", 404);
+          return json(publicPubkey(targetId, pubkeys[targetId]));
+        }
+        if (request.method === "POST") {
+          if (targetId !== me.id && me.role !== "owner") return err("只能登记自己的公钥", 403);
+          const body = await bodyJson();
+          const publicKey = String(body.public_key || "").trim();
+          if (publicKey.length < 100 || publicKey.length > 4000) return err("public_key 长度不对（应为 100–4000 字符的公钥文本）", 400);
+          if (/password|secret|private/i.test(publicKey)) return err("公钥里不应出现私钥内容", 400);
+          const algorithm = String(body.algorithm || "RSA-OAEP").trim().slice(0, 40);
+          pubkeys[targetId] = {
+            agent_name: targetId === me.id ? me.name : String(body.agent_name || "").trim().slice(0, 60),
+            algorithm, public_key: publicKey,
+            fingerprint: await sha12(publicKey), updated_at: Date.now(),
+          };
+          await savePubkeys(env, pubkeys);
+          return json(publicPubkey(targetId, pubkeys[targetId]));
+        }
+        return err("unknown api", 404);
+      }
+      // ---- 凭证密文库：只存密文 + 元数据。服务器端绝不接收明文。
+      if (url.pathname === "/api/credentials" && request.method === "GET") {
+        const me = await authIdentity(env, request);
+        if (!me) return err("需要 Bearer token", 401);
+        const creds = await loadCredentials(env);
+        const resourceId = url.searchParams.get("resource_id") || "";
+        const list = resourceId ? creds.filter((c) => c.resource_id === resourceId) : creds;
+        // 列表只给元数据，不含密文；单条取回时属主/借用人才能看到密文。
+        return json({ credentials: list.map((c) => publicCredential(c, false)) });
+      }
+      if (url.pathname === "/api/credentials" && request.method === "POST") {
+        const me = await authIdentity(env, request);
+        if (!me) return err("需要 Bearer token", 401);
+        const body = await bodyJson();
+        // 明文字段一律拒绝：凭证的明文只在借用人浏览器里加解密，绝不上服务器。
+        for (const k of ["plaintext", "password", "secret", "token", "api_key", "apikey", "credential"]) {
+          if (body[k] !== undefined && body[k] !== null && String(body[k]).trim() !== "") {
+            return err("不要把凭证明文发上来：只发密文（ciphertext / wrapped_key / iv）", 400);
+          }
+        }
+        const resourceId = String(body.resource_id || "").trim();
+        const recipientId = String(body.recipient_id || "").trim();
+        const ciphertext = String(body.ciphertext || "").trim();
+        const wrappedKey = String(body.wrapped_key || "").trim();
+        const iv = String(body.iv || "").trim();
+        if (!resourceId || !recipientId) return err("resource_id 和 recipient_id 都要填", 400);
+        if (ciphertext.length < 10 || ciphertext.length > 20000) return err("ciphertext 长度不对", 400);
+        if (wrappedKey.length < 10 || wrappedKey.length > 5000) return err("wrapped_key 长度不对", 400);
+        if (iv.length > 200) return err("iv 太长", 400);
+        const resources = await loadResources(env);
+        const resource = resources.find((x) => x.id === resourceId);
+        if (!resource) return err("资源不存在", 404);
+        const pubkeys = await loadPubkeys(env);
+        if (!pubkeys[recipientId]) return err("对方还没登记公钥，先让他登记公钥再分享", 400);
+        const creds = await loadCredentials(env);
+        const now = Date.now();
+        const c = {
+          id: newId("c_"), resource_id: resourceId, resource_name: resource.name,
+          owner_id: me.id, owner_name: me.name,
+          recipient_id: recipientId,
+          recipient_name: pubkeys[recipientId].agent_name || recipientId,
+          algorithm: String(body.algorithm || "RSA-OAEP+AES-GCM").trim().slice(0, 60),
+          ciphertext, wrapped_key: wrappedKey, iv,
+          fingerprint: await sha12(ciphertext),
+          expires_at: String(body.expires_at || "").trim().slice(0, 120) || null,
+          created_at: now,
+        };
+        creds.push(c);
+        await saveCredentials(env, creds);
+        return json(publicCredential(c, true));
+      }
+      const credentialMatch = url.pathname.match(/^\/api\/credentials\/([A-Za-z0-9_-]+)$/);
+      if (credentialMatch) {
+        const me = await authIdentity(env, request);
+        if (!me) return err("需要 Bearer token", 401);
+        const creds = await loadCredentials(env);
+        const idx = creds.findIndex((x) => x.id === credentialMatch[1]);
+        if (idx < 0) return err("凭证不存在", 404);
+        if (request.method === "GET") {
+          return json(publicCredential(creds[idx], canSeeCredential(me, creds[idx])));
+        }
+        if (request.method === "DELETE") {
+          if (creds[idx].owner_id !== me.id && me.role !== "owner") return err("只有凭证属主或房主能删除", 403);
+          creds.splice(idx, 1);
+          await saveCredentials(env, creds);
+          return json({ ok: true, id: credentialMatch[1] });
+        }
+        return err("unknown api", 404);
+      }
+
       // ---- 房间消息 / 桥接 / WS ----
       const m = url.pathname.match(/^\/api\/rooms\/([a-z0-9-]+)\/(messages|ws|delete|bridge-message)$/);
       if (m) {
@@ -2285,12 +2801,14 @@ export default {
           // 靠这一刷出现在在线名单里（5 分钟窗口）。
           const me = await authIdentity(env, request, true);
           if (!me) return authFailErr(env, request);
+
           const r = await stub.fetch("https://do/room/history?limit=" + encodeURIComponent(url.searchParams.get("limit") || "20"));
           return json(await r.json(), r.status);
         }
         if (m[2] === "messages" && request.method === "POST") {
           const me = await authIdentity(env, request, true);
           if (!me) return authFailErr(env, request);
+
           const bodyText = await request.text();
           const r = await stub.fetch("https://do/room/send", {
             method: "POST",
@@ -2302,6 +2820,7 @@ export default {
         if (m[2] === "delete" && request.method === "POST") {
           const me = await authIdentity(env, request);
           if (!me) return authFailErr(env, request);
+
           const bodyText = await request.text();
           const r = await stub.fetch("https://do/room/delete", {
             method: "POST",
@@ -2341,6 +2860,7 @@ export default {
         if (m[2] === "ws") {
           const me = await authQueryToken(env, url);
           if (!me) return wsFailErr(env, url);
+
           regCall(env, "/registry/touch", { token: me.token }).catch(() => {});
           const r = await stub.fetch("https://do/room/ws", {
             headers: {
@@ -2356,6 +2876,7 @@ export default {
       if (url.pathname === "/api/files/upload" && request.method === "POST") {
         const me = await authIdentity(env, request);
         if (!me) return authFailErr(env, request);
+
         const cfg = await getStorageConfig(env);
         if (cfg.provider === "none") return err("管理员还没配置文件存储", 503);
         let form;
@@ -2390,6 +2911,7 @@ export default {
       if (url.pathname === "/api/files/status" && request.method === "GET") {
         const me = await authIdentity(env, request);
         if (!me) return authFailErr(env, request);
+
         const cfg = await getStorageConfig(env);
         return json({ enabled: cfg.provider !== "none", provider: cfg.provider, max_file_mb: cfg.max_file_mb });
       }
@@ -2421,6 +2943,7 @@ export default {
       if (fileMatch && fileMatch[1] !== "upload" && fileMatch[1] !== "status" && request.method === "DELETE") {
         const me = await authIdentity(env, request);
         if (!me) return authFailErr(env, request);
+
         const { status, data } = await regCall(env, "/registry/files/get?id=" + encodeURIComponent(fileMatch[1]));
         if (status !== 200) return err(data.error || "文件不存在", 404);
         const { status: ds, data: dd } = await regCall(env, "/registry/files/delete", { id: fileMatch[1], requester_id: me.id, is_admin: me.role === "owner" });
@@ -2561,6 +3084,7 @@ export default {
       if (url.pathname === "/api/workbench/board" && request.method === "POST") {
         const me = await authIdentity(env, request);
         if (!me) return authFailErr(env, request);
+
         const body = await bodyJson();
         if (!body || typeof body !== "object" || !Array.isArray(body.tasks)) return err("快照里要有 tasks 数组", 400);
         const snapshot = { ...body, updated_at: body.updated_at || new Date().toISOString() };
@@ -2570,12 +3094,33 @@ export default {
       if (url.pathname === "/api/workbench/board" && request.method === "GET") {
         const me = await authIdentity(env, request);
         if (!me) return authFailErr(env, request);
+
         const { data } = await regCall(env, "/registry/meta?key=workbench_board");
         if (!data || !data.value) return json({ board: null, updated_at: null });
         let board = null;
         try { board = JSON.parse(data.value); } catch { return json({ board: null, updated_at: null }); }
         return json({ board, updated_at: board.updated_at || null });
       }
+      // ---- Agent 审批看板快照（审批入口用；快照由同步任务每 5 分钟推送）----
+      if (url.pathname === "/api/approval-board" && request.method === "POST") {
+        const me = await authIdentity(env, request);
+        if (!me) return err("需要 Bearer token", 401);
+        const body = await bodyJson();
+        if (!body || typeof body !== "object" || !Array.isArray(body.pending)) return err("快照里要有 pending 数组", 400);
+        const snapshot = { ...body, updated_at: body.updated_at || new Date().toISOString() };
+        await regCall(env, "/registry/meta", { key: "approval_board", value: JSON.stringify(snapshot) });
+        return json({ ok: true, updated_at: snapshot.updated_at });
+      }
+      if (url.pathname === "/api/approval-board" && request.method === "GET") {
+        const me = await authIdentity(env, request);
+        if (!me) return err("需要 Bearer token", 401);
+        const { data } = await regCall(env, "/registry/meta?key=approval_board");
+        if (!data || !data.value) return json({ board: null, updated_at: null });
+        let board = null;
+        try { board = JSON.parse(data.value); } catch { return json({ board: null, updated_at: null }); }
+        return json({ board, updated_at: board.updated_at || null });
+      }
+
       if (url.pathname.startsWith("/api/")) return err("unknown api", 404);
       if (env.ASSETS) return env.ASSETS.fetch(request);
       return new Response("ai-chatroom", { headers: { "content-type": "text/plain" } });
